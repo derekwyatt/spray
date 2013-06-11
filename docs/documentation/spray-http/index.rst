@@ -93,4 +93,4 @@ incoming responses by :ref:`spray-client`. File extension resolution (as used fo
 :ref:`FileAndResourceDirectives`) will work as expected.
 
 .. _IANA MIME media type registry: http://www.iana.org/assignments/media-types/index.html
-.. _MediaTypes: https://github.com/spray/spray/blob/master/spray-http/src/main/scala/spray/http/MediaType.scala
+.. _MediaTypes: https://github.com/spray/spray/blob/release/1.2/spray-http/src/main/scala/spray/http/MediaType.scala

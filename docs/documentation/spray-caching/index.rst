@@ -102,6 +102,6 @@ has to be strictly greater than the time-to-idle.
    they might prevent gargabe collection of their values for longer than expected.
 
 
-.. _Cache: https://github.com/spray/spray/blob/master/spray-caching/src/main/scala/spray/caching/Cache.scala
-.. _SimpleLruCache and ExpiringLruCache: https://github.com/spray/spray/blob/master/spray-caching/src/main/scala/spray/caching/LruCache.scala
+.. _Cache: https://github.com/spray/spray/blob/v1.2-M8/spray-caching/src/main/scala/spray/caching/Cache.scala
+.. _SimpleLruCache and ExpiringLruCache: https://github.com/spray/spray/blob/v1.2-M8/spray-caching/src/main/scala/spray/caching/LruCache.scala
 .. _concurrentlinkedhashmap: http://code.google.com/p/concurrentlinkedhashmap/
