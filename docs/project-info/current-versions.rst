@@ -1,4 +1,4 @@
-.. _current-versions:
+.. _Current Versions:
 
 Current Version(s)
 ==================
