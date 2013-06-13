@@ -1,6 +1,6 @@
 .. _Current Versions:
 
-Current Version(s)
-==================
+Current Versions
+================
 
 stub
