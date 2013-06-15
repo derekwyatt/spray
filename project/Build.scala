@@ -144,6 +144,14 @@ object Build extends Build with DocSupport {
       test(akkaTestKit, specs2)
     )
 
+  lazy val sprayMetrics = Project("spray-metrics", file("spray-metrics"))
+    .dependsOn(sprayRouting, sprayHttp, sprayTestKit)
+    .settings(sprayModuleSettings: _*)
+    .settings(libraryDependencies ++=
+      provided(akkaActor) ++
+      compile(metricsCore) ++
+      test(specs2)
+    )
 
   // -------------------------------------------------------------------------------------------------------------------
   // Site Project
