@@ -18,57 +18,66 @@ package spray.metrics
 package directives
 
 import spray.http.HttpResponse
-import spray.routing.{ Directive0, RequestContext }
+import spray.routing.{ Directive0, RequestContext, RouteConcatenation }
 
 import com.codahale.metrics.MetricRegistry
 
-trait MetricsDirectives {
+trait NonMetricsDirectives {
   import spray.routing.directives.BasicDirectives._
-
-  val metricRegistry: MetricRegistry
 
   def around[A](before: RequestContext ⇒ (RequestContext, A))(after: A ⇒ HttpResponse ⇒ HttpResponse): Directive0 =
     mapRequestContext { ctx ⇒
       val (newCtx, a) = before(ctx)
       newCtx.withHttpResponseMapped(after(a))
     }
+}
 
-  def counted(counterPrefix: String): Directive0 =
-    mapHttpResponse { rsp ⇒
+class CounterMetric(prefix: String, metricRegistry: MetricRegistry) { self ⇒
+  import spray.routing.directives.BasicDirectives._
+  import spray.routing.directives.ExecutionDirectives._
+
+  val withContext: RequestContext ⇒ RequestContext = { ctx ⇒
+    ctx.withHttpResponseMapped { rsp ⇒
       if (rsp.status.isFailure)
-        metricRegistry.counter(s"$counterPrefix.failure").inc()
+        metricRegistry.counter(s"$prefix.failures").inc()
       else
-        metricRegistry.counter(s"$counterPrefix.success").inc()
+        metricRegistry.counter(s"$prefix.successes").inc()
       rsp
     }
+  }
 
-  def countedUri: Directive0 =
+  val count: Directive0 = mapRequestContext { ctx ⇒ withContext(ctx) }
+
+  def countingRejections: CounterMetric = new CounterMetric(prefix, metricRegistry) {
+    override val withContext: RequestContext ⇒ RequestContext = { ctx ⇒
+      self.withContext(ctx.withRejectionHandling { rejections ⇒
+        metricRegistry.counter(s"$prefix.rejections").inc()
+      })
+    }
+  }
+}
+
+class CounterMetricByUri(metricRegistry: MetricRegistry) extends NonMetricsDirectives {
+  import spray.routing.directives.BasicDirectives._
+
+  val count: Directive0 =
     around { ctx ⇒
       val key = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
       (ctx, key)
     } { key ⇒
       rsp ⇒
         if (rsp.status.isFailure)
-          metricRegistry.counter(s"$key.failure").inc()
+          metricRegistry.counter(s"$key.failures").inc()
         else
-          metricRegistry.counter(s"$key.success").inc()
+          metricRegistry.counter(s"$key.successes").inc()
         rsp
     }
+}
 
-  def countFailed(counterName: String): Directive0 =
-    mapHttpResponse { rsp ⇒
-      if (rsp.status.isFailure)
-        metricRegistry.counter(counterName).inc()
-      rsp
-    }
+class TimerMetric(timerName: String, metricRegistry: MetricRegistry) extends NonMetricsDirectives {
+  import spray.routing.directives.BasicDirectives._
 
-  def metered(meterName: String): Directive0 =
-    mapInnerRoute { route ⇒
-      metricRegistry.meter(meterName).mark()
-      route
-    }
-
-  def timed(timerName: String): Directive0 =
+  val time: Directive0 =
     around { ctx ⇒
       (ctx, metricRegistry.timer(timerName).time())
     } { timerContext ⇒
@@ -78,8 +87,31 @@ trait MetricsDirectives {
     }
 }
 
-object MetricsDirectives {
-  def apply(registry: MetricRegistry) = new MetricsDirectives {
+class TimerMetricByUri(metricRegistry: MetricRegistry) extends NonMetricsDirectives {
+  import spray.routing.directives.BasicDirectives._
+
+  val time: Directive0 =
+    around { ctx ⇒
+      val key = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
+      (ctx, metricRegistry.timer(key).time())
+    } { timerContext ⇒
+      rsp ⇒
+        timerContext.stop()
+        rsp
+    }
+}
+
+trait CodaHaleMetricsDirectiveFactory {
+  val metricRegistry: MetricRegistry
+
+  def counter(counterPrefix: String): CounterMetric = new CounterMetric(counterPrefix, metricRegistry)
+  def counter: CounterMetricByUri = new CounterMetricByUri(metricRegistry)
+  def timer(timerPrefix: String): TimerMetric = new TimerMetric(timerPrefix, metricRegistry)
+  def timer: TimerMetricByUri = new TimerMetricByUri(metricRegistry)
+}
+
+object CodaHaleMetricsDirectiveFactory {
+  def apply(registry: MetricRegistry) = new CodaHaleMetricsDirectiveFactory {
     val metricRegistry = registry
   }
 }

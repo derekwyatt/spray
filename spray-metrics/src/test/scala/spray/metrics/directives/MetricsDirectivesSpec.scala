@@ -26,51 +26,88 @@ import spray.testkit.Specs2RouteTest
 import com.codahale.metrics.MetricRegistry
 
 object MetricsDirectivesSpec {
-  class RoutableMetrics extends Scope with Directives with MetricsDirectives {
+  class RoutableMetrics extends Scope with Directives {
     val metricRegistry = new MetricRegistry()
+    val metricFactory = CodaHaleMetricsDirectiveFactory(metricRegistry)
+
+    val counter = metricFactory.counter("counter")
+    val rejectionCounter = metricFactory.counter("counter").countingRejections
+    val counterByUri = metricFactory.counter
+    val timer = metricFactory.timer("timer")
+    val timerByUri = metricFactory.timer
+
     val route =
-      dynamic {
+      path("counter") {
         get {
-          path("counter") {
-            counted("counter") {
+          counter.count {
+            complete(OK)
+          }
+        }
+      } ~
+        path("failedcounter") {
+          get {
+            counter.count {
+              complete(InternalServerError)
+            }
+          }
+        } ~
+        path("rejectioncounter") {
+          rejectionCounter.count {
+            get {
               complete(OK)
             }
-          } ~
-            path("counter" / "with" / "uri") {
-              countedUri {
-                complete(OK)
-              }
-            } ~
-            path("meter") {
-              metered("meter") {
-                complete(OK)
-              }
-            } ~
-            path("timer") {
-              timed("timer") {
-                Thread.sleep(20)
-                complete(OK)
-              }
+          }
+        } ~
+        path("counter" / "with" / "uri") {
+          get {
+            counterByUri.count {
+              complete(OK)
             }
+          }
+        } ~
+        path("timer") {
+          get {
+            timer.time {
+              Thread.sleep(20)
+              complete(OK)
+            }
+          }
+        } ~
+        path("timer" / "with" / "uri") {
+          get {
+            timerByUri.time {
+              Thread.sleep(20)
+              complete(OK)
+            }
+          }
         }
-      }
   }
 }
 
 class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
   import MetricsDirectivesSpec._
 
+  def assertCounters(metricRegistry: MetricRegistry, successes: Int, failures: Int, rejections: Int) = {
+    metricRegistry.counter("counter.successes").getCount() === successes
+    metricRegistry.counter("counter.failures").getCount() === failures
+    metricRegistry.counter("counter.rejections").getCount() === rejections
+  }
   "MetricsDirectives" should { //{1
     "increment the counter on /counter" in new RoutableMetrics { //{2
       Get("/counter") ~> route ~> check {
         status === OK
-        metricRegistry.counter("counter.success").getCount() === 1
+        assertCounters(metricRegistry, 1, 0, 0)
       }
     } //}2
-    "increment the uri counter" in new RoutableMetrics { //{2
-      Get("/counter/with/uri") ~> route ~> check {
-        status === (OK)
-        metricRegistry.counter("counter.with.uri.success").getCount() === (1)
+    "increment the failure counter on /failedcounter" in new RoutableMetrics { //{2
+      Get("/failedcounter") ~> route ~> check {
+        status === InternalServerError
+        assertCounters(metricRegistry, 0, 1, 0)
+      }
+    } //}2
+    "increment the rejection counter on /rejectioncounter" in new RoutableMetrics { //{2
+      Post("/rejectioncounter") ~> route ~> check {
+        assertCounters(metricRegistry, 0, 0, 1)
       }
     } //}2
     "increment the counter 20 times on /counter" in new RoutableMetrics { //{2
@@ -79,22 +116,26 @@ class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
           status === (OK)
         }
       }
-      metricRegistry.counter("counter.success").getCount() === (20)
+      assertCounters(metricRegistry, 20, 0, 0)
     } //}2
-    "modify the meter" in new RoutableMetrics { //{2
-      (1 to 50) foreach { _ ⇒
-        Get("/meter") ~> route ~> check {
-          status === (OK)
-        }
+    "increment the uri counter" in new RoutableMetrics { //{2
+      Get("/counter/with/uri") ~> route ~> check {
+        status === (OK)
+        metricRegistry.counter("counter.with.uri.successes").getCount() === (1)
       }
-      metricRegistry.meter("meter").getCount() === (50)
-      metricRegistry.meter("meter").getMeanRate() !=== (0.0)
     } //}2
     "modify the timer" in new RoutableMetrics { //{2
       Get("/timer") ~> route ~> check {
-        status must be(OK)
+        status === OK
         metricRegistry.timer("timer").getCount() === (1)
         metricRegistry.timer("timer").getMeanRate() !== (0.0)
+      }
+    } //}2
+    "modify the uri timer" in new RoutableMetrics { //{2
+      Get("/timer/with/uri") ~> route ~> check {
+        status === OK
+        metricRegistry.timer("timer.with.uri").getCount() === (1)
+        metricRegistry.timer("timer.with.uri").getMeanRate() !== (0.0)
       }
     } //}2
   } //}1
