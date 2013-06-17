@@ -451,6 +451,7 @@ class TcpExt(system: ExtendedActorSystem) extends IO.Extension {
       case "unlimited" ⇒ Int.MaxValue
       case _           ⇒ getIntBytes("file-io-transferTo-limit")
     }
+    val LogIOExceptionStackTraces = getBoolean("log-io-exception-stack-traces")
 
     val MaxChannelsPerSelector: Int = if (MaxChannels == -1) -1 else math.max(MaxChannels / NrOfSelectors, 1)
 

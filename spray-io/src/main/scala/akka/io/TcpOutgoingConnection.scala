@@ -57,6 +57,7 @@ private[io] class TcpOutgoingConnection(_tcp: TcpExt,
           case e: IOException ⇒
             if (tcp.Settings.TraceLogging) log.debug("Could not establish connection due to {}", e)
             closedMessage = TcpConnection.CloseInformation(Set(commander), connect.failureMessage)
+            if (!tcp.Settings.LogIOExceptionStackTraces) TcpConnection.clearStackTrace(e)
             throw e
         }
 
