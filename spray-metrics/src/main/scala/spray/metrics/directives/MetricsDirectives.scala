@@ -138,6 +138,25 @@ case class TimerMetricByUri(metricRegistry: MetricRegistry) extends TimerBase {
     }
 }
 
+case class MeterMetric(meterName: String, metricRegistry: MetricRegistry) {
+  import spray.routing.directives.BasicDirectives._
+
+  val meter: Directive0 = mapRequestContext { ctx ⇒
+    metricRegistry.meter(meterName).mark()
+    ctx
+  }
+}
+
+case class MeterMetricByUri(metricRegistry: MetricRegistry) {
+  import spray.routing.directives.BasicDirectives._
+
+  val meter: Directive0 = mapRequestContext { ctx ⇒
+    val meterName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
+    metricRegistry.meter(meterName).mark()
+    ctx
+  }
+}
+
 trait CodaHaleMetricsDirectiveFactory {
   val metricRegistry: MetricRegistry
 
@@ -149,6 +168,9 @@ trait CodaHaleMetricsDirectiveFactory {
 
   def timer(timerPrefix: String): TimerMetric = new TimerMetric(timerPrefix, metricRegistry)
   def timer: TimerMetricByUri = new TimerMetricByUri(metricRegistry)
+
+  def meter(meterName: String): MeterMetric = new MeterMetric(meterName, metricRegistry)
+  def meter: MeterMetricByUri = new MeterMetricByUri(metricRegistry)
 }
 
 object CodaHaleMetricsDirectiveFactory {

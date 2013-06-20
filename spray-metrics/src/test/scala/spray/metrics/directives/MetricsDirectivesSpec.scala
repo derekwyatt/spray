@@ -38,6 +38,8 @@ object MetricsDirectivesSpec {
     val counterByUri = metricFactory.counter
     val timer = metricFactory.timer("timer")
     val timerByUri = metricFactory.timer
+    val meter = metricFactory.meter("meter")
+    val meterByUri = metricFactory.meter
 
     // buildPathGet //{2
     def buildPathGet(statusCode: StatusCode,
@@ -102,6 +104,12 @@ object MetricsDirectivesSpec {
     def failureTimer(uri: Boolean = false) = buildCase(InternalServerError, "500", timer.time, timerByUri.time, false, uri)
     def rejectionTimer(uri: Boolean = false) = buildCase(OK, "reject", timer.time, timerByUri.time, false, uri)
     def exceptionTimer(uri: Boolean = false) = buildCase(OK, "throw", timer.time, timerByUri.time, true, uri)
+
+    // Meter Routes //{2
+    def successMeter(uri: Boolean = false) = buildCase(OK, "200", meter.meter, meterByUri.meter, false, uri)
+    def failureMeter(uri: Boolean = false) = buildCase(InternalServerError, "500", meter.meter, meterByUri.meter, false, uri)
+    def rejectionMeter(uri: Boolean = false) = buildCase(OK, "reject", meter.meter, meterByUri.meter, false, uri)
+    def exceptionMeter(uri: Boolean = false) = buildCase(OK, "throw", meter.meter, meterByUri.meter, true, uri)
     //}2
 
     val route: Route
@@ -121,145 +129,139 @@ class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
     metricRegistry.timer(timerName).getCount() === (1)
     metricRegistry.timer(timerName).getMeanRate() !== (0.0)
   }
+  def assertMeter(meterName: String, metricRegistry: MetricRegistry) = {
+    metricRegistry.meter(meterName).getCount() === (1)
+    metricRegistry.meter(meterName).getMeanRate() !== (0.0)
+  }
 
   // Drivers and Testers //{1
-  // Counter success //{2
-  def driveCounterSuccess(path: String, route: Route): Unit = {
-    Get(path) ~> route ~> check {
-      status === OK
-    }
+  // Route Driver //{2
+  def driveRoute(route: Route, uri: Boolean = false): Unit = {
+    val postfix = if (uri) "/with/uri" else ""
+    Get(s"/200$postfix") ~> route
+    Get(s"/500$postfix") ~> route
+    Post(s"/reject$postfix") ~> route
+    Get(s"/throw$postfix") ~> route
   }
-  def testCounterSuccess(path: String, route: Route, metricRegistry: MetricRegistry, prefix: String): Unit = {
-    driveCounterSuccess(path, route)
+  // Counter success //{2
+  def testCounterSuccess(route: Route, metricRegistry: MetricRegistry, prefix: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
     assertCounters(prefix, metricRegistry, 1, 0, 0, 0)
   }
   // 20 Counter successes //{2
-  def testCounter20Successes(path: String, route: Route, metricRegistry: MetricRegistry, prefix: String): Unit = {
+  def testCounter20Successes(route: Route, metricRegistry: MetricRegistry, prefix: String, uri: Boolean = false): Unit = {
     (1 to 20) foreach { _ ⇒
-      driveCounterSuccess(path, route)
+      driveRoute(route, uri)
     }
     assertCounters(prefix, metricRegistry, 20, 0, 0, 0)
   }
   // Counter failure //{2
-  def driveCounterFailure(path: String, route: Route): Unit = {
-    Get(path) ~> route ~> check {
-      status === InternalServerError
-    }
-  }
-  def testCounterFailure(path: String, route: Route, metricRegistry: MetricRegistry, prefix: String): Unit = {
-    driveCounterFailure(path, route)
+  def testCounterFailure(route: Route, metricRegistry: MetricRegistry, prefix: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
     assertCounters(prefix, metricRegistry, 0, 1, 0, 0)
   }
   // Counter rejection //{2
-  def driveCounterRejection(path: String, route: Route): Unit = {
-    Post(path) ~> route
-  }
-  def testCounterRejection(path: String, route: Route, metricRegistry: MetricRegistry, prefix: String): Unit = {
-    driveCounterRejection(path, route)
+  def testCounterRejection(route: Route, metricRegistry: MetricRegistry, prefix: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
     assertCounters(prefix, metricRegistry, 0, 0, 1, 0)
   }
   // Counter exception //{2
-  def driveCounterException(path: String, route: Route): Unit = {
-    Get(path) ~> route
-  }
-  def testCounterException(path: String, route: Route, metricRegistry: MetricRegistry, prefix: String): Unit = {
-    driveCounterException(path, route)
+  def testCounterException(route: Route, metricRegistry: MetricRegistry, prefix: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
     assertCounters(prefix, metricRegistry, 0, 0, 0, 1)
   }
 
   // Timer success //{2
-  def driveTimerSuccess(path: String, route: Route): Unit = {
-    Get(path) ~> route ~> check {
-      status === OK
-    }
-  }
-  def testTimerSuccess(path: String, route: Route, metricRegistry: MetricRegistry, timerName: String): Unit = {
-    driveTimerSuccess(path, route)
+  def testTimerSuccess(route: Route, metricRegistry: MetricRegistry, timerName: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
     assertTimer(timerName, metricRegistry)
   }
   // Timer failure //{2
-  def driveTimerFailure(path: String, route: Route): Unit = {
-    Get(path) ~> route ~> check {
-      status === InternalServerError
-    }
-  }
-  def testTimerFailure(path: String, route: Route, metricRegistry: MetricRegistry, timerName: String): Unit = {
-    driveTimerFailure(path, route)
+  def testTimerFailure(route: Route, metricRegistry: MetricRegistry, timerName: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
     assertTimer(timerName, metricRegistry)
   }
   // Timer rejection //{2
-  def driveTimerRejection(path: String, route: Route): Unit = {
-    Post(path) ~> route
-  }
-  def testTimerRejection(path: String, route: Route, metricRegistry: MetricRegistry, timerName: String): Unit = {
-    driveTimerRejection(path, route)
+  def testTimerRejection(route: Route, metricRegistry: MetricRegistry, timerName: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
     assertTimer(timerName, metricRegistry)
   }
   // Timer exception //{2
-  def driveTimerException(path: String, route: Route): Unit = {
-    Post(path) ~> route
-  }
-  def testTimerException(path: String, route: Route, metricRegistry: MetricRegistry, timerName: String): Unit = {
-    driveTimerException(path, route)
+  def testTimerException(route: Route, metricRegistry: MetricRegistry, timerName: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
     assertTimer(timerName, metricRegistry)
+  }
+  // Meter success //{2
+  def testMeterSuccess(route: Route, metricRegistry: MetricRegistry, meterName: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
+    assertMeter(meterName, metricRegistry)
+  }
+  // Meter failure //{2
+  def testMeterFailure(route: Route, metricRegistry: MetricRegistry, meterName: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
+    assertMeter(meterName, metricRegistry)
+  }
+  // Meter rejection //{2
+  def testMeterRejection(route: Route, metricRegistry: MetricRegistry, meterName: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
+    assertMeter(meterName, metricRegistry)
+  }
+  // Meter exception //{2
+  def testMeterException(route: Route, metricRegistry: MetricRegistry, meterName: String, uri: Boolean = false): Unit = {
+    driveRoute(route, uri)
+    assertMeter(meterName, metricRegistry)
   }
   //}1
 
   "MetricsDirectives" should { //{1
     "increment the counter" in new RoutableMetrics { //{2
       val route = successCounter()
-      testCounterSuccess("/200", route, metricRegistry, "counter")
+      testCounterSuccess(route, metricRegistry, "counter")
     } //}2
     "increment the failure counter" in new RoutableMetrics { //{2
       val route = failureCounter()
-      testCounterFailure("/500", route, metricRegistry, "counter")
+      testCounterFailure(route, metricRegistry, "counter")
     } //}2
     "increment the rejection counter" in new RoutableMetrics { //{2
       val route = rejectionCounter()
-      testCounterRejection("/reject", route, metricRegistry, "counter")
+      testCounterRejection(route, metricRegistry, "counter")
     } //}2
     "increment the exception counter" in new RoutableMetrics { //{2
       val route = exceptionCounter()
-      testCounterException("/throw", route, metricRegistry, "counter")
+      testCounterException(route, metricRegistry, "counter")
     } //}2
     "increment the counter 20 times" in new RoutableMetrics { //{2
       val route = successCounter()
-      testCounter20Successes("/200", route, metricRegistry, "counter")
+      testCounter20Successes(route, metricRegistry, "counter")
     } //}2
     "increment all counters" in new RoutableMetrics { //{2
       val route = allCounter()
-      driveCounterSuccess("/200", route)
-      driveCounterFailure("/500", route)
-      driveCounterRejection("/reject", route)
-      driveCounterException("/throw", route)
+      driveRoute(route)
       assertCounters("counter", metricRegistry, 1, 1, 1, 1)
     } //}2
     "increment the uri counter" in new RoutableMetrics { //{2
-      val route = successCounter(uri = true)
-      testCounterSuccess("/200/with/uri", route, metricRegistry, "200.with.uri")
+      val route = successCounter(true)
+      testCounterSuccess(route, metricRegistry, "200.with.uri", true)
     } //}2
     "increment the failure uri counter" in new RoutableMetrics { //{2
       val route = failureCounter(true)
-      testCounterFailure("/500/with/uri", route, metricRegistry, "500.with.uri")
+      testCounterFailure(route, metricRegistry, "500.with.uri", true)
     } //}2
     "increment the rejection uri counter" in new RoutableMetrics { //{2
       val route = rejectionCounter(true)
-      testCounterRejection("/reject/with/uri", route, metricRegistry, "reject.with.uri")
+      testCounterRejection(route, metricRegistry, "reject.with.uri", true)
     } //}2
     "increment the exception uri counter" in new RoutableMetrics { //{2
       val route = exceptionCounter(true)
-      testCounterException("/throw/with/uri", route, metricRegistry, "throw.with.uri")
+      testCounterException(route, metricRegistry, "throw.with.uri", true)
     } //}2
     "increment the uri counter 20 times" in new RoutableMetrics { //{2
       val route = successCounter(true)
-      testCounter20Successes("/200/with/uri", route, metricRegistry, "200.with.uri")
+      testCounter20Successes(route, metricRegistry, "200.with.uri", true)
     } //}2
     "increment all uri counters" in new RoutableMetrics { //{2
       val route = allCounter(true)
-      driveCounterSuccess("/200/with/uri", route)
-      driveCounterFailure("/500/with/uri", route)
-      driveCounterRejection("/reject/with/uri", route)
-      driveCounterException("/throw/with/uri", route)
+      driveRoute(route, true)
       assertCounters("200.with.uri", metricRegistry, 1, 0, 0, 0)
       assertCounters("500.with.uri", metricRegistry, 0, 1, 0, 0)
       assertCounters("reject.with.uri", metricRegistry, 0, 0, 1, 0)
@@ -267,35 +269,67 @@ class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
     } //}2
     "modify the timer on success" in new RoutableMetrics { //{2
       val route = successTimer()
-      testTimerSuccess("/200", route, metricRegistry, "timer")
+      testTimerSuccess(route, metricRegistry, "timer")
     } //}2
     "modify the timer on failure" in new RoutableMetrics { //{2
       val route = failureTimer()
-      testTimerFailure("/500", route, metricRegistry, "timer")
+      testTimerFailure(route, metricRegistry, "timer")
     } //}2
     "modify the timer on rejection" in new RoutableMetrics { //{2
       val route = rejectionTimer()
-      testTimerRejection("/reject", route, metricRegistry, "timer")
+      testTimerRejection(route, metricRegistry, "timer")
     } //}2
     "modify the timer on exception" in new RoutableMetrics { //{2
       val route = exceptionTimer()
-      testTimerException("/throw", route, metricRegistry, "timer")
+      testTimerException(route, metricRegistry, "timer")
     } //}2
     "modify the uri timer on success" in new RoutableMetrics { //{2
       val route = successTimer(true)
-      testTimerSuccess("/200/with/uri", route, metricRegistry, "200.with.uri")
+      testTimerSuccess(route, metricRegistry, "200.with.uri", true)
     } //}2
     "modify the uri timer on failure" in new RoutableMetrics { //{2
       val route = failureTimer(true)
-      testTimerFailure("/500/with/uri", route, metricRegistry, "500.with.uri")
+      testTimerFailure(route, metricRegistry, "500.with.uri", true)
     } //}2
     "modify the uri timer on rejection" in new RoutableMetrics { //{2
       val route = rejectionTimer(true)
-      testTimerRejection("/reject/with/uri", route, metricRegistry, "reject.with.uri")
+      testTimerRejection(route, metricRegistry, "reject.with.uri", true)
     } //}2
     "modify the uri timer on exception" in new RoutableMetrics { //{2
       val route = exceptionTimer(true)
-      testTimerException("/throw/with/uri", route, metricRegistry, "throw.with.uri")
+      testTimerException(route, metricRegistry, "throw.with.uri", true)
+    } //}2
+    "modify the meter on success" in new RoutableMetrics { //{2
+      val route = successMeter()
+      testMeterSuccess(route, metricRegistry, "meter")
+    } //}2
+    "modify the meter on failure" in new RoutableMetrics { //{2
+      val route = failureMeter()
+      testMeterFailure(route, metricRegistry, "meter")
+    } //}2
+    "modify the meter on rejection" in new RoutableMetrics { //{2
+      val route = rejectionMeter()
+      testMeterRejection(route, metricRegistry, "meter")
+    } //}2
+    "modify the meter on exception" in new RoutableMetrics { //{2
+      val route = exceptionMeter()
+      testMeterException(route, metricRegistry, "meter")
+    } //}2
+    "modify the uri meter on success" in new RoutableMetrics { //{2
+      val route = successMeter(true)
+      testMeterSuccess(route, metricRegistry, "200.with.uri", true)
+    } //}2
+    "modify the uri meter on failure" in new RoutableMetrics { //{2
+      val route = failureMeter(true)
+      testMeterFailure(route, metricRegistry, "500.with.uri", true)
+    } //}2
+    "modify the uri meter on rejection" in new RoutableMetrics { //{2
+      val route = rejectionMeter(true)
+      testMeterRejection(route, metricRegistry, "reject.with.uri", true)
+    } //}2
+    "modify the uri meter on exception" in new RoutableMetrics { //{2
+      val route = exceptionMeter(true)
+      testMeterException(route, metricRegistry, "throw.with.uri", true)
     } //}2
   } //}1
 }
