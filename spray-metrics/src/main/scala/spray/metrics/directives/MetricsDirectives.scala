@@ -17,87 +17,124 @@
 package spray.metrics
 package directives
 
+import akka.actor.Status.Failure
+
+import scala.util.control.NonFatal
+
 import spray.http.HttpResponse
-import spray.routing.{ Directive0, RequestContext, RouteConcatenation }
+import spray.routing.{ Directive0, Rejected, RequestContext, RouteConcatenation }
 
-import com.codahale.metrics.MetricRegistry
+import com.codahale.metrics.{ MetricRegistry, Timer }
 
-trait NonMetricsDirectives {
-  import spray.routing.directives.BasicDirectives._
+object CounterMetric {
+  type CountIncrementer = (String, MetricRegistry) ⇒ Unit
 
-  def around[A](before: RequestContext ⇒ (RequestContext, A))(after: A ⇒ HttpResponse ⇒ HttpResponse): Directive0 =
-    mapRequestContext { ctx ⇒
-      val (newCtx, a) = before(ctx)
-      newCtx.withHttpResponseMapped(after(a))
-    }
+  val nilIncrementer: CountIncrementer = { (_, _) ⇒ () }
+
+  def inc(postfix: String)(prefix: String, metricRegistry: MetricRegistry): Unit =
+    metricRegistry.counter(s"$prefix.$postfix").inc()
+
+  val incSuccesses = inc("successes") _
+  val incFailures = inc("failures") _
+  val incRejections = inc("rejections") _
+  val incExceptions = inc("exceptions") _
 }
 
-class CounterMetric(prefix: String, metricRegistry: MetricRegistry) { self ⇒
-  import spray.routing.directives.BasicDirectives._
-  import spray.routing.directives.ExecutionDirectives._
+sealed trait CounterBase {
+  val metricRegistry: MetricRegistry
+  val handleFailures: CounterMetric.CountIncrementer
+  val handleRejections: CounterMetric.CountIncrementer
+  val handleExceptions: CounterMetric.CountIncrementer
+  val handleSuccesses: CounterMetric.CountIncrementer
 
-  val withContext: RequestContext ⇒ RequestContext = { ctx ⇒
-    ctx.withHttpResponseMapped { rsp ⇒
-      if (rsp.status.isFailure)
-        metricRegistry.counter(s"$prefix.failures").inc()
-      else
-        metricRegistry.counter(s"$prefix.successes").inc()
-      rsp
+  def buildAfter(key: String): Any ⇒ Any = { possibleRsp: Any ⇒
+    possibleRsp match {
+      case rsp: HttpResponse ⇒
+        if (rsp.status.isFailure) handleFailures(key, metricRegistry)
+        else handleSuccesses(key, metricRegistry)
+      case Rejected(_) ⇒
+        handleRejections(key, metricRegistry)
+      case Failure(_) ⇒
+        handleExceptions(key, metricRegistry)
     }
+    possibleRsp
+  }
+}
+
+case class CounterMetric(
+    prefix: String,
+    metricRegistry: MetricRegistry,
+    handleFailures: CounterMetric.CountIncrementer = CounterMetric.nilIncrementer,
+    handleRejections: CounterMetric.CountIncrementer = CounterMetric.nilIncrementer,
+    handleExceptions: CounterMetric.CountIncrementer = CounterMetric.nilIncrementer,
+    handleSuccesses: CounterMetric.CountIncrementer = CounterMetric.incSuccesses) extends CounterBase {
+
+  import CounterMetric._
+  import spray.routing.directives.BasicDirectives._
+
+  val count: Directive0 = around { ctx ⇒ (ctx, buildAfter(prefix)) }
+
+  def notCountingSuccesses: CounterMetric = copy(handleSuccesses = nilIncrementer)
+  def countingRejections: CounterMetric = copy(handleRejections = incRejections)
+  def countingFailures: CounterMetric = copy(handleFailures = incFailures)
+  def countingExceptions: CounterMetric = copy(handleExceptions = incExceptions)
+  def countingAll: CounterMetric =
+    copy(handleFailures = incFailures, handleRejections = incRejections, handleExceptions = incExceptions, handleSuccesses = incSuccesses)
+}
+
+case class CounterMetricByUri(
+    metricRegistry: MetricRegistry,
+    handleFailures: CounterMetric.CountIncrementer = CounterMetric.nilIncrementer,
+    handleRejections: CounterMetric.CountIncrementer = CounterMetric.nilIncrementer,
+    handleExceptions: CounterMetric.CountIncrementer = CounterMetric.nilIncrementer,
+    handleSuccesses: CounterMetric.CountIncrementer = CounterMetric.incSuccesses) extends CounterBase {
+
+  import CounterMetric._
+  import spray.routing.directives.BasicDirectives._
+
+  val count: Directive0 = around { ctx ⇒
+    val key = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
+    (ctx, buildAfter(key))
   }
 
-  val count: Directive0 = mapRequestContext { ctx ⇒ withContext(ctx) }
+  def notCountingSuccesses: CounterMetricByUri = copy(handleSuccesses = nilIncrementer)
+  def countingFailures: CounterMetricByUri = copy(handleFailures = incFailures)
+  def countingRejections: CounterMetricByUri = copy(handleRejections = incRejections)
+  def countingExceptions: CounterMetricByUri = copy(handleExceptions = incExceptions)
+  def countingAll: CounterMetricByUri =
+    copy(handleFailures = incFailures, handleRejections = incRejections, handleExceptions = incExceptions, handleSuccesses = incSuccesses)
+}
 
-  def countingRejections: CounterMetric = new CounterMetric(prefix, metricRegistry) {
-    override val withContext: RequestContext ⇒ RequestContext = { ctx ⇒
-      self.withContext(ctx.withRejectionHandling { rejections ⇒
-        metricRegistry.counter(s"$prefix.rejections").inc()
-      })
+sealed trait TimerBase {
+  val metricRegistry: MetricRegistry
+
+  def buildAfter(timerContext: Timer.Context): Any ⇒ Any = { possibleRsp: Any ⇒
+    possibleRsp match {
+      case _ ⇒
+        timerContext.stop()
     }
+    possibleRsp
   }
 }
 
-class CounterMetricByUri(metricRegistry: MetricRegistry) extends NonMetricsDirectives {
-  import spray.routing.directives.BasicDirectives._
-
-  val count: Directive0 =
-    around { ctx ⇒
-      val key = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
-      (ctx, key)
-    } { key ⇒
-      rsp ⇒
-        if (rsp.status.isFailure)
-          metricRegistry.counter(s"$key.failures").inc()
-        else
-          metricRegistry.counter(s"$key.successes").inc()
-        rsp
-    }
-}
-
-class TimerMetric(timerName: String, metricRegistry: MetricRegistry) extends NonMetricsDirectives {
+case class TimerMetric(timerName: String, metricRegistry: MetricRegistry) extends TimerBase {
   import spray.routing.directives.BasicDirectives._
 
   val time: Directive0 =
     around { ctx ⇒
-      (ctx, metricRegistry.timer(timerName).time())
-    } { timerContext ⇒
-      rsp ⇒
-        timerContext.stop()
-        rsp
+      val timerContext = metricRegistry.timer(timerName).time()
+      (ctx, buildAfter(timerContext))
     }
 }
 
-class TimerMetricByUri(metricRegistry: MetricRegistry) extends NonMetricsDirectives {
+case class TimerMetricByUri(metricRegistry: MetricRegistry) extends TimerBase {
   import spray.routing.directives.BasicDirectives._
 
   val time: Directive0 =
     around { ctx ⇒
       val key = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
-      (ctx, metricRegistry.timer(key).time())
-    } { timerContext ⇒
-      rsp ⇒
-        timerContext.stop()
-        rsp
+      val timerContext = metricRegistry.timer(key).time()
+      (ctx, buildAfter(timerContext))
     }
 }
 
@@ -105,7 +142,11 @@ trait CodaHaleMetricsDirectiveFactory {
   val metricRegistry: MetricRegistry
 
   def counter(counterPrefix: String): CounterMetric = new CounterMetric(counterPrefix, metricRegistry)
+  def allCounter(counterPrefix: String): CounterMetric = new CounterMetric(counterPrefix, metricRegistry).countingAll
+
   def counter: CounterMetricByUri = new CounterMetricByUri(metricRegistry)
+  def allCounter: CounterMetricByUri = new CounterMetricByUri(metricRegistry).countingAll
+
   def timer(timerPrefix: String): TimerMetric = new TimerMetric(timerPrefix, metricRegistry)
   def timer: TimerMetricByUri = new TimerMetricByUri(metricRegistry)
 }

@@ -17,10 +17,20 @@
 package spray.routing
 package directives
 
+import akka.actor.Status.Failure
+import scala.util.control.NonFatal
 import shapeless._
 import spray.http._
 
 trait BasicDirectives {
+
+  def around(before: RequestContext ⇒ (RequestContext, Any ⇒ Any)): Directive0 =
+    mapInnerRoute { inner ⇒
+      ctx ⇒
+        val (ctxForInnerRoute, after) = before(ctx)
+        try inner(ctxForInnerRoute.withRouteResponseMapped(after))
+        catch { case NonFatal(ex) ⇒ after(Failure(ex)) }
+    }
 
   def mapInnerRoute(f: Route ⇒ Route): Directive0 = new Directive0 {
     def happly(inner: HNil ⇒ Route) = f(inner(HNil))
