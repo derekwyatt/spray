@@ -119,6 +119,7 @@ object MetricsDirectivesSpec {
 class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
   import MetricsDirectivesSpec._
 
+  // Assertions //{2
   def assertCounters(prefix: String, metricRegistry: MetricRegistry, successes: Int, failures: Int, rejections: Int, exceptions: Int) = {
     metricRegistry.counter(s"$prefix.successes").getCount() === successes
     metricRegistry.counter(s"$prefix.failures").getCount() === failures
@@ -133,6 +134,7 @@ class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
     metricRegistry.meter(meterName).getCount() === (1)
     metricRegistry.meter(meterName).getMeanRate() !== (0.0)
   }
+  //}2
 
   // Drivers and Testers //{1
   // Route Driver //{2
