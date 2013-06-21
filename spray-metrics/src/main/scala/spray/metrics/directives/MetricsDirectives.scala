@@ -32,7 +32,7 @@ object CounterMetric {
   val nilIncrementer: CountIncrementer = { (_, _) ⇒ () }
 
   def inc(postfix: String)(prefix: String, metricRegistry: MetricRegistry): Unit =
-    metricRegistry.counter(prefix + postfix).inc()
+    metricRegistry.counter(prefix + "." + postfix).inc()
 
   val incSuccesses = inc("successes") _
   val incFailures = inc("failures") _
