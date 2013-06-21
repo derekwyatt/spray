@@ -47,7 +47,7 @@ private[parser] trait AcceptHeader {
         val parameters = toNonQValueMap(params)
         if (parameters.isEmpty) MediaRanges.getForKey(mainLower) getOrElse MediaRange.custom(mainLower)
         else MediaRange.custom(mainLower, parameters)
-      } else getMediaType(main, sub, parameters = toNonQValueMap(params).filterKeys())
+      } else getMediaType(main, sub, parameters = toNonQValueMap(params))
     }
   }
 
