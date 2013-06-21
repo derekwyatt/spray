@@ -355,7 +355,7 @@ case class TimerMetricByUri(metricRegistry: MetricRegistry) extends TimerBase {
     around { ctx ⇒
       val methodName = ctx.request.method.name
       val routeName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
-      val key = methodName + "." + routeName
+      val timerContext = metricRegistry.timer(methodName + "." + routeName).time()
       (ctx, buildAfter(timerContext))
     }
 }
