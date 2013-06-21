@@ -22,31 +22,85 @@ import akka.actor.Status.Failure
 import scala.util.control.NonFatal
 
 import spray.http.HttpResponse
-import spray.routing.{ Directive0, Rejected, RequestContext, RouteConcatenation }
+import spray.routing.{ Directive0, Rejected, RequestContext }
 
 import com.codahale.metrics.{ MetricRegistry, Timer }
 
+/**
+ * The CounterMetric object holds helpers for code that implements Counters.
+ */
 object CounterMetric {
+  // Declares the function type that increments a given metric
   type CountIncrementer = (String, MetricRegistry) ⇒ Unit
 
+  // Increments nothing at all
   val nilIncrementer: CountIncrementer = { (_, _) ⇒ () }
 
+  /**
+   * Increments the counter specified by "prefix.postfix" in the given
+   * MetricRegistry.
+   *
+   * @param postfix
+   *   The identifier for the counter is defined with some prefix and some
+   *   postfix.  The postfix is something like 'successes' or 'failures'.  The
+   *   prefix may be much more dynamically determined.
+   * @param prefix
+   *   The prefix of the counter metric identifier.  This may be a constant
+   *   defined elsewhwere or dynamically computed by the route path.
+   * @param metricRegistry
+   *   The instance of the MetricRegistry in which the counter resides.
+   */
   def inc(postfix: String)(prefix: String, metricRegistry: MetricRegistry): Unit =
     metricRegistry.counter(prefix + "." + postfix).inc()
 
+  // An instance of the [[inc]] function for successes
   val incSuccesses = inc("successes") _
+
+  // An instance of the [[inc]] function for failures
   val incFailures = inc("failures") _
+
+  // An instance of the [[inc]] function for rejections
   val incRejections = inc("rejections") _
+
+  // An instance of the [[inc]] function for exceptions
   val incExceptions = inc("exceptions") _
 }
 
+/**
+ * The CounterBase trait provides helpers for derivations that implement
+ * specific types of Counter metrics.
+ */
 sealed trait CounterBase {
-  val metricRegistry: MetricRegistry
-  val handleFailures: CounterMetric.CountIncrementer
-  val handleRejections: CounterMetric.CountIncrementer
-  val handleExceptions: CounterMetric.CountIncrementer
-  val handleSuccesses: CounterMetric.CountIncrementer
+  import CounterMetric.CountIncrementer
 
+  // The instance of the MetricRegistry that holdes this counter metric
+  val metricRegistry: MetricRegistry
+
+  // The incrementer for the counter that counts failing metrics
+  val handleFailures: CountIncrementer
+
+  // The incrementer for the counter that counts rejecting metrics
+  val handleRejections: CountIncrementer
+
+  // The incrementer for the counter that counts excepting metrics
+  val handleExceptions: CountIncrementer
+
+  // The incrementer for the counter that counts successful metrics
+  val handleSuccesses: CountIncrementer
+
+  /**
+   * The [[spray.routing.BasicDirectives#around]] directive requires that the
+   * caller return a function that will process what happens <i>after</i> the
+   * specific [[spray.routing.Route]] completes.  This method builds that
+   * function.
+   *
+   * @param key
+   *   The prefix that we can send to any of the incrementation handlers.
+   *
+   * @return
+   *   The function that can deal with the result of the
+   *   [[spray.routing.Route]]'s evaluation.
+   */
   def buildAfter(key: String): Any ⇒ Any = { possibleRsp: Any ⇒
     possibleRsp match {
       case rsp: HttpResponse ⇒
@@ -61,6 +115,37 @@ sealed trait CounterBase {
   }
 }
 
+/**
+ * Provides a builder that can provide a new [[spray.routing.Directive]], which
+ * will count successful, failed, rejected or excepted operations in a given
+ * [[spray.routing.Route]].
+ *
+ * The actual identifiers for this counter will be, given a specific
+ * `prefix`:
+ *
+ * - {prefix}.successes
+ * - {prefix}.failures
+ * - {prefix}.rejections
+ * - {prefix}.exceptions
+ *
+ * @constructor Create the counter metric with a specific prefix.
+ * @param prefix
+ *   The user-specific designation for this counter's Id.
+ * @param metricRegistry
+ *   The instance of the MetricRegistry that holds the counter metric.
+ * @param handleFailures
+ *   A function that will increment `preifx.failures`. Defaults to
+ *   [[CountIncrementer.nilIncrementer]].
+ * @param handleRejections
+ *   A function that will increment `preifx.rejections`. Defaults to
+ *   [[CountIncrementer.nilIncrementer]].
+ * @param handleExceptions
+ *   A function that will increment `preifx.exceptions`. Defaults to
+ *   [[CountIncrementer.nilIncrementer]].
+ * @param handleSuccesses
+ *   A function that will increment `preifx.successes`. Defaults to
+ *   [[CountIncrementer.incSuccesses]].
+ */
 case class CounterMetric(
     prefix: String,
     metricRegistry: MetricRegistry,
@@ -72,16 +157,76 @@ case class CounterMetric(
   import CounterMetric._
   import spray.routing.directives.BasicDirectives._
 
+  /**
+   * This is the instance of the [[spray.routing.Directive]] that you can use in
+   * your [[spray.routing.Route]].
+   */
   val count: Directive0 = around { ctx ⇒ (ctx, buildAfter(prefix)) }
 
-  def notCountingSuccesses: CounterMetric = copy(handleSuccesses = nilIncrementer)
-  def countingRejections: CounterMetric = copy(handleRejections = incRejections)
-  def countingFailures: CounterMetric = copy(handleFailures = incFailures)
-  def countingExceptions: CounterMetric = copy(handleExceptions = incExceptions)
-  def countingAll: CounterMetric =
-    copy(handleFailures = incFailures, handleRejections = incRejections, handleExceptions = incExceptions, handleSuccesses = incSuccesses)
+  /**
+   * Returns a new instance of the CounterMetric that will <i>not</i> count
+   * successes. Any other counting aspect will remain as it was.
+   */
+  def noSuccesses: CounterMetric = copy(handleSuccesses = nilIncrementer)
+
+  /**
+   * Returns a new instance of the CounterMetric that will count rejections. Any
+   * other counting aspect will remain as it was.
+   */
+  def rejections: CounterMetric = copy(handleRejections = incRejections)
+
+  /**
+   * Returns a new instance of the CounterMetric that will count failures. Any
+   * other counting aspect will remain as it was.
+   */
+  def failures: CounterMetric = copy(handleFailures = incFailures)
+
+  /**
+   * Returns a new instance of the CounterMetric that will count exceptions. Any
+   * other counting aspect will remain as it was.
+   */
+  def exceptions: CounterMetric = copy(handleExceptions = incExceptions)
+
+  /**
+   * Returns a new instance of the CounterMetric that will count successes,
+   * failures, rejections and exceptions.
+   */
+  def all: CounterMetric = copy(handleFailures = incFailures,
+    handleRejections = incRejections,
+    handleExceptions = incExceptions,
+    handleSuccesses = incSuccesses)
 }
 
+/**
+ * Provides a builder that can provide a new [[spray.routing.Directive]], which
+ * will count successful, failed, rejected or excepted operations in a given
+ * [[spray.routing.Route]].
+ *
+ * The actual identifiers for this counter will be, depending on the incoming
+ * URL (e.g. `/path/to/route` translates to `path.to.route`):
+ *
+ * - {path.to.route}.successes
+ * - {path.to.route}.failures
+ * - {path.to.route}.rejections
+ * - {path.to.route}.exceptions
+ *
+ * @constructor Create the counter metric that will use the route path for the
+ * metric name.
+ * @param metricRegistry
+ *   The instance of the MetricRegistry that holds the counter metric.
+ * @param handleFailures
+ *   A function that will increment `preifx.failures`. Defaults to
+ *   [[CountIncrementer.nilIncrementer]].
+ * @param handleRejections
+ *   A function that will increment `preifx.rejections`. Defaults to
+ *   [[CountIncrementer.nilIncrementer]].
+ * @param handleExceptions
+ *   A function that will increment `preifx.exceptions`. Defaults to
+ *   [[CountIncrementer.nilIncrementer]].
+ * @param handleSuccesses
+ *   A function that will increment `preifx.successes`. Defaults to
+ *   [[CountIncrementer.incSuccesses]].
+ */
 case class CounterMetricByUri(
     metricRegistry: MetricRegistry,
     handleFailures: CounterMetric.CountIncrementer = CounterMetric.nilIncrementer,
@@ -92,22 +237,70 @@ case class CounterMetricByUri(
   import CounterMetric._
   import spray.routing.directives.BasicDirectives._
 
+  /**
+   * This is the instance of the [[spray.routing.Directive]] that you can use in
+   * your [[spray.routing.Route]].
+   */
   val count: Directive0 = around { ctx ⇒
-    val key = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
+    val methodName = ctx.request.method.name
+    val routeName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
+    val key = methodName + "." + routeName
     (ctx, buildAfter(key))
   }
 
-  def notCountingSuccesses: CounterMetricByUri = copy(handleSuccesses = nilIncrementer)
-  def countingFailures: CounterMetricByUri = copy(handleFailures = incFailures)
-  def countingRejections: CounterMetricByUri = copy(handleRejections = incRejections)
-  def countingExceptions: CounterMetricByUri = copy(handleExceptions = incExceptions)
-  def countingAll: CounterMetricByUri =
-    copy(handleFailures = incFailures, handleRejections = incRejections, handleExceptions = incExceptions, handleSuccesses = incSuccesses)
+  /**
+   * Returns a new instance of the CounterMetric that will <i>not</i> count
+   * successes. Any other counting aspect will remain as it was.
+   */
+  def noSuccesses: CounterMetricByUri = copy(handleSuccesses = nilIncrementer)
+
+  /**
+   * Returns a new instance of the CounterMetric that will count rejections. Any
+   * other counting aspect will remain as it was.
+   */
+  def failures: CounterMetricByUri = copy(handleFailures = incFailures)
+
+  /**
+   * Returns a new instance of the CounterMetric that will count failures. Any
+   * other counting aspect will remain as it was.
+   */
+  def rejections: CounterMetricByUri = copy(handleRejections = incRejections)
+
+  /**
+   * Returns a new instance of the CounterMetric that will count exceptions. Any
+   * other counting aspect will remain as it was.
+   */
+  def exceptions: CounterMetricByUri = copy(handleExceptions = incExceptions)
+
+  /**
+   * Returns a new instance of the CounterMetric that will count successes,
+   * failures, rejections and exceptions.
+   */
+  def all: CounterMetricByUri = copy(handleFailures = incFailures,
+    handleRejections = incRejections,
+    handleExceptions = incExceptions,
+    handleSuccesses = incSuccesses)
 }
 
+/**
+ * The TimerBase trait provides helpers for derivations that implement specific
+ * types of Timer metrics.
+ */
 sealed trait TimerBase {
-  val metricRegistry: MetricRegistry
-
+  /**
+   * The [[spray.routing.BasicDirectives#around]] directive requires that the
+   * caller return a function that will process what happens <i>after</i> the
+   * specific [[spray.routing.Route]] completes.  This method builds that
+   * function.
+   *
+   * @param timerContext
+   *   The context of the Timer that was originally started in the `before` part
+   *   of the [[spray.routing.BasicDirectives#around]]
+   *   [[spray.routing.Directive]].
+   *
+   * @return
+   *   The function that will stop the timer on any result whatsoever.
+   */
   def buildAfter(timerContext: Timer.Context): Any ⇒ Any = { possibleRsp: Any ⇒
     possibleRsp match {
       case _ ⇒
@@ -117,9 +310,23 @@ sealed trait TimerBase {
   }
 }
 
+/**
+ * Provides a Timer metric that will record times on the timer under the name
+ * given.
+ *
+ * @constructor Create the timer metric with a specific name.
+ * @param timerName
+ *   The name for this particular timer.
+ * @param metricRegistry
+ *   The instance of the MetricRegistry in which the timer metric exists.
+ */
 case class TimerMetric(timerName: String, metricRegistry: MetricRegistry) extends TimerBase {
   import spray.routing.directives.BasicDirectives._
 
+  /**
+   * This is the instance of the [[spray.routing.Directive]] that you can use in
+   * your [[spray.routing.Route]].
+   */
   val time: Directive0 =
     around { ctx ⇒
       val timerContext = metricRegistry.timer(timerName).time()
@@ -127,53 +334,225 @@ case class TimerMetric(timerName: String, metricRegistry: MetricRegistry) extend
     }
 }
 
+/**
+ * Provides a Timer metric that will record times based on the current HTTP
+ * route.
+ *
+ * @constructor Create the timer metric that will use the current path route for
+ * the metric name.
+ * @param metricRegistry
+ *   The instance of the MetricRegistry in which the timer metric is to be
+ *   created.
+ */
 case class TimerMetricByUri(metricRegistry: MetricRegistry) extends TimerBase {
   import spray.routing.directives.BasicDirectives._
 
+  /**
+   * This is the instance of the [[spray.routing.Directive]] that you can use in
+   * your [[spray.routing.Route]].
+   */
   val time: Directive0 =
     around { ctx ⇒
-      val key = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
-      val timerContext = metricRegistry.timer(key).time()
+      val methodName = ctx.request.method.name
+      val routeName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
+      val key = methodName + "." + routeName
       (ctx, buildAfter(timerContext))
     }
 }
 
+/**
+ * Provides a Meter metric that will mark a specific event under a Meter of a
+ * specific name.
+ *
+ * @constructor Create the meter metric with a specific name.
+ * @param meterName
+ *   The name under which the meter exists.
+ * @param metricRegistry
+ *   The instance of the MetricRegistry in which the meter metric exists.
+ */
 case class MeterMetric(meterName: String, metricRegistry: MetricRegistry) {
   import spray.routing.directives.BasicDirectives._
 
+  /**
+   * This is the instance of the [[spray.routing.Directive]] that you can use in
+   * your [[spray.routing.Route]].
+   */
   val meter: Directive0 = mapRequestContext { ctx ⇒
     metricRegistry.meter(meterName).mark()
     ctx
   }
 }
 
+/**
+ * Provides a Meter metric that will mark a specific event under a Meter that
+ * has an identifier that matches the current [[spray.routing.Route]] path.
+ *
+ * @constructor Create the meter metric that will use the current path route for
+ * the metric name.
+ * @param metricRegistry
+ *   The instance of the MetricRegistry in which to create the meter metric.
+ */
 case class MeterMetricByUri(metricRegistry: MetricRegistry) {
   import spray.routing.directives.BasicDirectives._
 
+  /**
+   * This is the instance of the [[spray.routing.Directive]] that you can use in
+   * your [[spray.routing.Route]].
+   */
   val meter: Directive0 = mapRequestContext { ctx ⇒
-    val meterName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
-    metricRegistry.meter(meterName).mark()
+    val methodName = ctx.request.method.name
+    val routeName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
+    val key = methodName + "." + routeName
+    metricRegistry.meter(key).mark()
     ctx
   }
 }
 
+/**
+ * Provides an entry point to creating metric accumulators specific to the Coda
+ * Hale Metrics library (http://metrics.codahale.com).
+ *
+ * ==Overview==
+ *
+ * This trait is intended to be used to construct objects that provide
+ * [[spray.routing.Directive]]s, which can then be used to instrument your
+ * [[spray.routing.Route]]s with metrics accumulators.  You would create these
+ * instances, and then join them together however you like in order to ease how
+ * your code is instrumented.
+ *
+ * ==Usage==
+ *
+ * {{{
+ * import com.codahale.metrics.MetricRegistry
+ *
+ * class MyApp extends Directives {
+ *   val metricRegistry = new MetricRegistry()
+ *   val metricFactory = CodaHaleMetricsDirectiveFactory(metricRegistry)
+ *
+ *   // Creates a counter that measures failures only under the name of the
+ *   // path to the current route
+ *   val counter = metricFactory.counter.failures.noSuccesses.count
+ *
+ *   // Creates a timer that measures everything under the name of the
+ *   // path to the current route
+ *   val timer = metricFactory.timer.time
+ *
+ *   // Joins the two metrics into a single directive
+ *   val measure = counter | timer
+ *
+ *   val apiRoute =
+ *     path("something") {
+ *       measure {
+ *         get {
+ *           // do the thing
+ *         }
+ *       }
+ *     }
+ * }
+ * }}}
+ */
 trait CodaHaleMetricsDirectiveFactory {
+  // The instance of the MetricRegistry in which you want to store your metrics
   val metricRegistry: MetricRegistry
 
+  /**
+   * Creates an instance of a [[CounterMetric]] with a specific prefix name that
+   * counts successes by default.
+   *
+   * @param counterPrefix
+   *   The prefix of the counter's identifier.
+   *
+   * @return
+   *   The instance of the [[CounterMetric]] you can use to count events.
+   */
   def counter(counterPrefix: String): CounterMetric = new CounterMetric(counterPrefix, metricRegistry)
-  def allCounter(counterPrefix: String): CounterMetric = new CounterMetric(counterPrefix, metricRegistry).countingAll
 
+  /**
+   * Creates an instance of a [[CounterMetric]] with a specific prefix name that
+   * counts all types of events.
+   *
+   * @param counterPrefix
+   *   The prefix of the counter's identifier.
+   *
+   * @return
+   *   The instance of the [[CounterMetric]] you can use to count events.
+   */
+  def allCounter(counterPrefix: String): CounterMetric = new CounterMetric(counterPrefix, metricRegistry).all
+
+  /**
+   * Creates an instance of a [[CounterMetric]] that counts successes by
+   * default under an identifier unique to the path to the current route..
+   *
+   * @return
+   *   The instance of the [[CounterMetric]] you can use to count events.
+   */
   def counter: CounterMetricByUri = new CounterMetricByUri(metricRegistry)
-  def allCounter: CounterMetricByUri = new CounterMetricByUri(metricRegistry).countingAll
 
-  def timer(timerPrefix: String): TimerMetric = new TimerMetric(timerPrefix, metricRegistry)
+  /**
+   * Creates an instance of a [[CounterMetric]] that counts all types of events
+   * under an identifier unique to the path to the current route..
+   *
+   * @return
+   *   The instance of the [[CounterMetric]] you can use to count events.
+   */
+  def allCounter: CounterMetricByUri = new CounterMetricByUri(metricRegistry).all
+
+  /**
+   * Creates an instance of a [[TimerMetric]] that measures events with a
+   * specific name.
+   *
+   * @param timerName
+   *   The name of the timer in which measured events should be recorded.
+   *
+   * @return
+   *   The instance of the [[TimerMetric]] you can use to measure events.
+   */
+  def timer(timerName: String): TimerMetric = new TimerMetric(timerName, metricRegistry)
+
+  /**
+   * Creates an instance of a [[TimerMetric]] that measures events with a
+   * name specific to the path to the current route.
+   *
+   * @return
+   *   The instance of the [[TimerMetric]] you can use to measure events.
+   */
   def timer: TimerMetricByUri = new TimerMetricByUri(metricRegistry)
 
+  /**
+   * Creates an instance of a [[MeterMetric]] that measures events with a
+   * specific name.
+   *
+   * @param meterName
+   *   The name of the meter in which measured events should be recorded.
+   *
+   * @return
+   *   The instance of the [[MeterMetric]] you can use to measure events.
+   */
   def meter(meterName: String): MeterMetric = new MeterMetric(meterName, metricRegistry)
+
+  /**
+   * Creates an instance of a [[MeterMetric]] that measures events with a
+   * name specific to the path to the current route.
+   *
+   * @return
+   *   The instance of the [[MeterMetric]] you can use to measure events.
+   */
   def meter: MeterMetricByUri = new MeterMetricByUri(metricRegistry)
 }
 
+/**
+ * Provides construction for an instance of the CodaHaleMetricsDirectiveFactory.
+ */
 object CodaHaleMetricsDirectiveFactory {
+  /**
+   * Constructs and instance of the CodaHaleMetricsDirectiveFactory around a
+   * specific instance of a MetricRegistry.
+   *
+   * @param registry
+   *   The instance of the MetricRegistry that this factory should use.
+   * @return
+   *   The instance of the CodaHaleMetricsDirectiveFactory to be used.
+   */
   def apply(registry: MetricRegistry) = new CodaHaleMetricsDirectiveFactory {
     val metricRegistry = registry
   }
