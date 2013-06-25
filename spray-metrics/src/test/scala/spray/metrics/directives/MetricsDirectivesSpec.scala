@@ -236,31 +236,31 @@ class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
     }
     "increment the uri counter" in new RoutableMetrics {
       val route = successCounter(true)
-      testCounterSuccess(route, metricRegistry, "GET.200.with.uri", true)
+      testCounterSuccess(route, metricRegistry, "200.with.uri.GET", true)
     }
     "increment the failure uri counter" in new RoutableMetrics {
       val route = failureCounter(true)
-      testCounterFailure(route, metricRegistry, "GET.500.with.uri", true)
+      testCounterFailure(route, metricRegistry, "500.with.uri.GET", true)
     }
     "increment the rejection uri counter" in new RoutableMetrics {
       val route = rejectionCounter(true)
-      testCounterRejection(route, metricRegistry, "POST.reject.with.uri", true)
+      testCounterRejection(route, metricRegistry, "reject.with.uri.POST", true)
     }
     "increment the exception uri counter" in new RoutableMetrics {
       val route = exceptionCounter(true)
-      testCounterException(route, metricRegistry, "GET.throw.with.uri", true)
+      testCounterException(route, metricRegistry, "throw.with.uri.GET", true)
     }
     "increment the uri counter 20 times" in new RoutableMetrics {
       val route = successCounter(true)
-      testCounter20Successes(route, metricRegistry, "GET.200.with.uri", true)
+      testCounter20Successes(route, metricRegistry, "200.with.uri.GET", true)
     }
     "increment all uri counters" in new RoutableMetrics {
       val route = allCounter(true)
       driveRoute(route, true)
-      assertCounters("GET.200.with.uri", metricRegistry, 1, 0, 0, 0)
-      assertCounters("GET.500.with.uri", metricRegistry, 0, 1, 0, 0)
-      assertCounters("POST.reject.with.uri", metricRegistry, 0, 0, 1, 0)
-      assertCounters("GET.throw.with.uri", metricRegistry, 0, 0, 0, 1)
+      assertCounters("200.with.uri.GET", metricRegistry, 1, 0, 0, 0)
+      assertCounters("500.with.uri.GET", metricRegistry, 0, 1, 0, 0)
+      assertCounters("reject.with.uri.POST", metricRegistry, 0, 0, 1, 0)
+      assertCounters("throw.with.uri.GET", metricRegistry, 0, 0, 0, 1)
     }
     "modify the timer on success" in new RoutableMetrics {
       val route = successTimer()
@@ -280,19 +280,19 @@ class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
     }
     "modify the uri timer on success" in new RoutableMetrics {
       val route = successTimer(true)
-      testTimerSuccess(route, metricRegistry, "GET.200.with.uri", true)
+      testTimerSuccess(route, metricRegistry, "200.with.uri.GET", true)
     }
     "modify the uri timer on failure" in new RoutableMetrics {
       val route = failureTimer(true)
-      testTimerFailure(route, metricRegistry, "GET.500.with.uri", true)
+      testTimerFailure(route, metricRegistry, "500.with.uri.GET", true)
     }
     "modify the uri timer on rejection" in new RoutableMetrics {
       val route = rejectionTimer(true)
-      testTimerRejection(route, metricRegistry, "POST.reject.with.uri", true)
+      testTimerRejection(route, metricRegistry, "reject.with.uri.POST", true)
     }
     "modify the uri timer on exception" in new RoutableMetrics {
       val route = exceptionTimer(true)
-      testTimerException(route, metricRegistry, "GET.throw.with.uri", true)
+      testTimerException(route, metricRegistry, "throw.with.uri.GET", true)
     }
     "modify the meter on success" in new RoutableMetrics {
       val route = successMeter()
@@ -312,19 +312,19 @@ class MetricsDirectivesSpec extends Specification with Specs2RouteTest {
     }
     "modify the uri meter on success" in new RoutableMetrics {
       val route = successMeter(true)
-      testMeterSuccess(route, metricRegistry, "GET.200.with.uri", true)
+      testMeterSuccess(route, metricRegistry, "200.with.uri.GET", true)
     }
     "modify the uri meter on failure" in new RoutableMetrics {
       val route = failureMeter(true)
-      testMeterFailure(route, metricRegistry, "GET.500.with.uri", true)
+      testMeterFailure(route, metricRegistry, "500.with.uri.GET", true)
     }
     "modify the uri meter on rejection" in new RoutableMetrics {
       val route = rejectionMeter(true)
-      testMeterRejection(route, metricRegistry, "POST.reject.with.uri", true)
+      testMeterRejection(route, metricRegistry, "reject.with.uri.POST", true)
     }
     "modify the uri meter on exception" in new RoutableMetrics {
       val route = exceptionMeter(true)
-      testMeterException(route, metricRegistry, "GET.throw.with.uri", true)
+      testMeterException(route, metricRegistry, "throw.with.uri.GET", true)
     }
   }
 }

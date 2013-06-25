@@ -27,6 +27,27 @@ import spray.routing.{ Directive0, Rejected, RequestContext }
 import com.codahale.metrics.{ MetricRegistry, Timer }
 
 /**
+ * Provides helper methods for metrics.
+ */
+object MetricHelpers {
+  /**
+   * Given a [[spray.routing.RequestContext]], will construct a valid string for
+   * the metric name using the HTTP method and the HTTP path.  e.g.
+   * `com.mycompany.mynoun.GET`.
+   *
+   * @param ctx The [[spray.routing.RequestContext]] for which the name should
+   * be generated.
+   *
+   * @return The generated name for the metric.
+   */
+  def metricName(ctx: RequestContext): String = {
+    val methodName = ctx.request.method.name
+    val routeName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
+    routeName + "." + methodName
+  }
+}
+
+/**
  * The CounterMetric object holds helpers for code that implements Counters.
  */
 object CounterMetric {
@@ -134,16 +155,16 @@ sealed trait CounterBase {
  * @param metricRegistry
  *   The instance of the MetricRegistry that holds the counter metric.
  * @param handleFailures
- *   A function that will increment `preifx.failures`. Defaults to
+ *   A function that will increment `{prefix}.failures`. Defaults to
  *   [[CountIncrementer.nilIncrementer]].
  * @param handleRejections
- *   A function that will increment `preifx.rejections`. Defaults to
+ *   A function that will increment `{prefix}.rejections`. Defaults to
  *   [[CountIncrementer.nilIncrementer]].
  * @param handleExceptions
- *   A function that will increment `preifx.exceptions`. Defaults to
+ *   A function that will increment `{prefix}.exceptions`. Defaults to
  *   [[CountIncrementer.nilIncrementer]].
  * @param handleSuccesses
- *   A function that will increment `preifx.successes`. Defaults to
+ *   A function that will increment `{prefix}.successes`. Defaults to
  *   [[CountIncrementer.incSuccesses]].
  */
 case class CounterMetric(
@@ -215,16 +236,16 @@ case class CounterMetric(
  * @param metricRegistry
  *   The instance of the MetricRegistry that holds the counter metric.
  * @param handleFailures
- *   A function that will increment `preifx.failures`. Defaults to
+ *   A function that will increment `{prefix}.failures`. Defaults to
  *   [[CountIncrementer.nilIncrementer]].
  * @param handleRejections
- *   A function that will increment `preifx.rejections`. Defaults to
+ *   A function that will increment `{prefix}.rejections`. Defaults to
  *   [[CountIncrementer.nilIncrementer]].
  * @param handleExceptions
- *   A function that will increment `preifx.exceptions`. Defaults to
+ *   A function that will increment `{prefix}.exceptions`. Defaults to
  *   [[CountIncrementer.nilIncrementer]].
  * @param handleSuccesses
- *   A function that will increment `preifx.successes`. Defaults to
+ *   A function that will increment `{prefix}.successes`. Defaults to
  *   [[CountIncrementer.incSuccesses]].
  */
 case class CounterMetricByUri(
@@ -235,6 +256,7 @@ case class CounterMetricByUri(
     handleSuccesses: CounterMetric.CountIncrementer = CounterMetric.incSuccesses) extends CounterBase {
 
   import CounterMetric._
+  import MetricHelpers._
   import spray.routing.directives.BasicDirectives._
 
   /**
@@ -242,10 +264,7 @@ case class CounterMetricByUri(
    * your [[spray.routing.Route]].
    */
   val count: Directive0 = around { ctx ⇒
-    val methodName = ctx.request.method.name
-    val routeName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
-    val key = methodName + "." + routeName
-    (ctx, buildAfter(key))
+    (ctx, buildAfter(metricName(ctx)))
   }
 
   /**
@@ -345,6 +364,7 @@ case class TimerMetric(timerName: String, metricRegistry: MetricRegistry) extend
  *   created.
  */
 case class TimerMetricByUri(metricRegistry: MetricRegistry) extends TimerBase {
+  import MetricHelpers._
   import spray.routing.directives.BasicDirectives._
 
   /**
@@ -353,9 +373,7 @@ case class TimerMetricByUri(metricRegistry: MetricRegistry) extends TimerBase {
    */
   val time: Directive0 =
     around { ctx ⇒
-      val methodName = ctx.request.method.name
-      val routeName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
-      val timerContext = metricRegistry.timer(methodName + "." + routeName).time()
+      val timerContext = metricRegistry.timer(metricName(ctx)).time()
       (ctx, buildAfter(timerContext))
     }
 }
@@ -393,6 +411,7 @@ case class MeterMetric(meterName: String, metricRegistry: MetricRegistry) {
  *   The instance of the MetricRegistry in which to create the meter metric.
  */
 case class MeterMetricByUri(metricRegistry: MetricRegistry) {
+  import MetricHelpers._
   import spray.routing.directives.BasicDirectives._
 
   /**
@@ -400,10 +419,7 @@ case class MeterMetricByUri(metricRegistry: MetricRegistry) {
    * your [[spray.routing.Route]].
    */
   val meter: Directive0 = mapRequestContext { ctx ⇒
-    val methodName = ctx.request.method.name
-    val routeName = ctx.request.uri.toString.drop(1).replaceAll("/", ".")
-    val key = methodName + "." + routeName
-    metricRegistry.meter(key).mark()
+    metricRegistry.meter(metricName(ctx)).mark()
     ctx
   }
 }
