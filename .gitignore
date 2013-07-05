@@ -24,5 +24,8 @@ out/
 # Mac
 .DS_Store
 
+# Vim
+*.sw[op]
+
 # Other
 *.pyc
