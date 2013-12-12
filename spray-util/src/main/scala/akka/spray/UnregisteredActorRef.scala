@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -49,7 +49,7 @@ abstract class UnregisteredActorRef(prov: ActorRefProvider) extends Unregistered
    */
   def registerForMultiResponse(isLastResponse: Any ⇒ Boolean, timeout: Timeout)(implicit executor: ExecutionContext): ActorRef =
     new LazyActorRef(provider) {
-      val timer = provider.scheduler.scheduleOnce(timeout.duration) {
+      val timer = provider.guardian.underlying.system.scheduler.scheduleOnce(timeout.duration) {
         stop()
       }
       def handle(message: Any)(implicit sender: ActorRef) {

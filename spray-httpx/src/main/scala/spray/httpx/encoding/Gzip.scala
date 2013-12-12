@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -94,7 +94,7 @@ class GzipDecompressor extends DeflateDecompressor {
         val x = buffer(off)
         off += 1
         x.toInt & 0xFF
-      } else fail("Unexpected end of data")
+      } else fail(s"Unexpected end of data offset: $off length: ${buffer.length}")
     }
     def readShort(): Int = readByte() | (readByte() << 8)
     def readInt(): Int = readShort() | (readShort() << 16)

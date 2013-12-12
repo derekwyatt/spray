@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ class Initializer extends ServletContextListener {
       try {
         val classLoader = ActorSystem.asInstanceOf[{ def findClassLoader(): ClassLoader }].findClassLoader()
         val config = ConfigFactory.load(classLoader)
-        val settings = ConnectorSettings(config getConfig "spray.servlet")
+        val settings = ConnectorSettings(config)
         servletContext.setAttribute(Initializer.SettingsAttrName, settings)
         def errorMsg(msg: String) = "Configured boot class " + settings.bootClass + ' ' + msg
         try {

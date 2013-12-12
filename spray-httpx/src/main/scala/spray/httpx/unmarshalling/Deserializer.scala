@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,9 +31,9 @@ trait Deserializer[A, B] extends (A ⇒ Deserialized[B]) { self ⇒
 
 object Deserializer extends DeserializerLowerPriorityImplicits
     with BasicUnmarshallers
-    with MetaUnmarshallers
+    with UnmarshallerLifting
     with FromStringDeserializers
-    with MultipartUnmarshallers {
+    with FormDataUnmarshallers {
 
   implicit def fromFunction2Converter[A, B](implicit f: A ⇒ B) =
     new Deserializer[A, B] {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,8 +18,9 @@ package spray.routing
 
 import spray.http._
 import HttpHeaders._
-import MediaTypes._
 import HttpMethods._
+import MediaTypes._
+import Uri._
 
 class MiscDirectivesSpec extends RoutingSpec {
 
@@ -27,12 +28,12 @@ class MiscDirectivesSpec extends RoutingSpec {
     "yield the first sub route if it succeeded" in {
       Get() ~> {
         get { complete("first") } ~ get { complete("second") }
-      } ~> check { entityAs[String] === "first" }
+      } ~> check { responseAs[String] === "first" }
     }
     "yield the second sub route if the first did not succeed" in {
       Get() ~> {
         post { complete("first") } ~ get { complete("second") }
-      } ~> check { entityAs[String] === "second" }
+      } ~> check { responseAs[String] === "second" }
     }
     "collect rejections from both sub routes" in {
       Delete() ~> {
@@ -70,23 +71,30 @@ class MiscDirectivesSpec extends RoutingSpec {
         }
       } ~> check { body === HttpEntity(`text/plain`, "[1,2,3]") }
     }
+    "reject invalid / insecure callback identifiers" in {
+      Get(Uri.from(path = "/", query = Query("jsonp" -> "(function xss(x){evil()})"))) ~> {
+        jsonpWithParameter("jsonp") {
+          complete(HttpResponse(entity = HttpEntity(`text/plain`, "[1,2,3]")))
+        }
+      } ~> check { rejections === Seq(MalformedQueryParamRejection("jsonp", "Invalid JSONP callback identifier")) }
+    }
   }
 
   "the clientIP directive" should {
     "extract from a X-Forwarded-For header" in {
       Get() ~> addHeaders(`X-Forwarded-For`("2.3.4.5"), RawHeader("x-real-ip", "1.2.3.4")) ~> {
         clientIP { echoComplete }
-      } ~> check { entityAs[String] === "2.3.4.5" }
+      } ~> check { responseAs[String] === "2.3.4.5" }
     }
-    "extract from a X-Real-IP header" in {
+    "extract from a Remote-Address header" in {
       Get() ~> addHeaders(RawHeader("x-real-ip", "1.2.3.4"), `Remote-Address`("5.6.7.8")) ~> {
         clientIP { echoComplete }
-      } ~> check { entityAs[String] === "5.6.7.8" }
+      } ~> check { responseAs[String] === "5.6.7.8" }
     }
     "extract from a X-Real-IP header" in {
       Get() ~> addHeader(RawHeader("x-real-ip", "1.2.3.4")) ~> {
         clientIP { echoComplete }
-      } ~> check { entityAs[String] === "1.2.3.4" }
+      } ~> check { responseAs[String] === "1.2.3.4" }
     }
   }
 

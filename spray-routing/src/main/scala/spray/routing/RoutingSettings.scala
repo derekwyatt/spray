@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@
 
 package spray.routing
 
-import com.typesafe.config.{ ConfigFactory, Config }
-import akka.actor.{ ActorRefFactory, ActorSystem }
+import com.typesafe.config.Config
+import akka.actor.ActorRefFactory
 import spray.util._
 
 case class RoutingSettings(
     verboseErrorMessages: Boolean,
     fileChunkingThresholdSize: Long,
-    fileChunkingChunkSize: Long,
+    fileChunkingChunkSize: Int,
     users: Config,
     renderVanityFooter: Boolean) {
 
@@ -31,20 +31,14 @@ case class RoutingSettings(
   require(fileChunkingChunkSize > 0, "file-chunking-chunk-size must be > 0")
 }
 
-object RoutingSettings {
+object RoutingSettings extends SettingsCompanion[RoutingSettings]("spray.routing") {
+  def fromSubConfig(c: Config) = apply(
+    c getBoolean "verbose-error-messages",
+    c getBytes "file-chunking-threshold-size",
+    c getIntBytes "file-chunking-chunk-size",
+    c getConfig "users",
+    c getBoolean "render-vanity-footer")
+
   implicit def default(implicit refFactory: ActorRefFactory) =
     apply(actorSystem)
-
-  def apply(system: ActorSystem): RoutingSettings =
-    apply(system.settings.config getConfig "spray.routing")
-
-  def apply(config: Config): RoutingSettings = {
-    val c = config withFallback ConfigFactory.defaultReference(getClass.getClassLoader)
-    RoutingSettings(
-      c getBoolean "verbose-error-messages",
-      c getBytes "file-chunking-threshold-size",
-      c getBytes "file-chunking-chunk-size",
-      c getConfig "users",
-      c getBoolean "render-vanity-footer")
-  }
 }

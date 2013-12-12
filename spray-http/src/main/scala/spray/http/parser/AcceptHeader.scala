@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 package spray.http
 package parser
 
-import scala.annotation.tailrec
 import org.parboiled.scala._
 import BasicRules._
 
@@ -29,29 +28,20 @@ private[parser] trait AcceptHeader {
 
   def MediaRangeDecl = rule {
     MediaRangeDef ~ zeroOrMore(";" ~ Parameter) ~~> { (main, sub, params) ⇒
-      // we don't support q values yet and don't want them to cause creation of custom MediaTypes every time
-      // we see them, so we filter them out of the parameter list here
-      @tailrec def toNonQValueMap(remaining: List[(String, String)],
-                                  builder: StringMapBuilder = null): Map[String, String] =
-        remaining match {
-          case Nil              ⇒ if (builder eq null) Map.empty else builder.result()
-          case ("q", _) :: tail ⇒ toNonQValueMap(tail, builder)
-          case kvp :: tail ⇒
-            val b = if (builder eq null) Map.newBuilder[String, String] else builder
-            b += kvp
-            toNonQValueMap(tail, b)
-        }
-
       if (sub == "*") {
         val mainLower = main.toLowerCase
-        val parameters = toNonQValueMap(params)
-        if (parameters.isEmpty) MediaRanges.getForKey(mainLower) getOrElse MediaRange.custom(mainLower)
-        else MediaRange.custom(mainLower, parameters)
-      } else getMediaType(main, sub, parameters = toNonQValueMap(params))
+        MediaRanges.getForKey(mainLower) match {
+          case Some(registered) ⇒ if (params.isEmpty) registered else registered.withParameters(params.toMap)
+          case None             ⇒ MediaRange.custom(mainLower, params.toMap)
+        }
+      } else {
+        val (p, q) = MediaRange.splitOffQValue(params.toMap)
+        MediaRange(getMediaType(main, sub, p), q)
+      }
     }
   }
 
   def MediaRangeDef = rule {
-    "*/*" ~ push("*", "*") | Type ~ "/" ~ ("*" ~ push("*") | Subtype) | "*" ~ push("*", "*")
+    "*/*" ~ push("*", "*") | Type ~ "/" ~ ("*" ~ !TokenChar ~ push("*") | Subtype) | "*" ~ push("*", "*")
   }
 }

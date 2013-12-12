@@ -24,12 +24,17 @@ The basic technique is explained in the chapter about :ref:`Composing Directives
     val getOrPut = get | put
 
 Another example are the MethodDirectives__, which are simply instances of a preconfigured :ref:`-method-` directive,
-such as:
+such as::
 
-.. includecode:: /../spray-routing/src/main/scala/spray/routing/directives/MethodDirectives.scala
-   :snippet: source-quote
+    val delete = method(DELETE)
+    val get = method(GET)
+    val head = method(HEAD)
+    val options = method(OPTIONS)
+    val patch = method(PATCH)
+    val post = method(POST)
+    val put = method(PUT)
 
-__ https://github.com/spray/spray/blob/master/spray-routing/src/main/scala/spray/routing/directives/MethodDirectives.scala
+__ https://github.com/spray/spray/blob/release/1.2/spray-routing/src/main/scala/spray/routing/directives/MethodDirectives.scala
 
 
 The low-level directives that most often form the basis of higher-level "named configuration" directives are grouped
@@ -42,7 +47,7 @@ Transforming Directives
 The second option for creating new directives is to transform an existing one using one of the "transformation methods",
 which are defined on the Directive__ class, the base class of all "regular" directives.
 
-__ https://github.com/spray/spray/blob/master/spray-routing/src/main/scala/spray/routing/Directive.scala
+__ https://github.com/spray/spray/blob/release/1.2/spray-routing/src/main/scala/spray/routing/Directive.scala
 
 Apart from the combinator operators (``|`` and ``&``) and the case-class extractor (``as[T]``) there are these
 transformations defined on all ``Directive[L <: HList]`` instances:
@@ -151,8 +156,8 @@ class. The ``Directive`` is defined like this (leaving away operators and modifi
       def happly(f: L => Route): Route
     }
 
-It only has one abstract member that you need to implement, the ``happly`` method, which creates the ``Route``, the
-directives presents to the outside, from its inner Route building function (taking the extractions as parameter).
+It only has one abstract member that you need to implement, the ``happly`` method, which creates the ``Route`` the
+directives presents to the outside from its inner Route building function (taking the extractions as parameter).
 
 Extractions are kept as a shapeless_ ``HList``. Here are a few examples:
 
@@ -164,6 +169,9 @@ Extractions are kept as a shapeless_ ``HList``. Here are a few examples:
     type Directive0 = Directive[HNil]
 
 - A ``Directive[String :: HNil]`` extracts one ``String`` value (like the :ref:`-hostName-` directive).
+  The type alias for it is::
+
+    type Directive1[T] = Directive[T :: HNil]
 
 - A ``Directive[Int :: String :: HNil]`` extracts an ``Int`` value and a ``String`` value
   (like a ``parameters('a.as[Int], 'b.as[String]`` directive).

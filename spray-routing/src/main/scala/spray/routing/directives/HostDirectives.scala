@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ trait HostDirectives {
   /**
    * Extracts the hostname part of the Host header value in the request.
    */
-  def hostName: Directive1[String] = extract(_.request.uri.authority.host.address)
+  def hostName: Directive1[String] = HostDirectives._hostName
 
   /**
    * Rejects all requests with a host name different from the given ones.
@@ -63,4 +63,9 @@ trait HostDirectives {
 
 }
 
-object HostDirectives extends HostDirectives
+object HostDirectives extends HostDirectives {
+  import BasicDirectives._
+
+  private val _hostName: Directive1[String] =
+    extract(_.request.uri.authority.host.address)
+}

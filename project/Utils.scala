@@ -1,12 +1,13 @@
 import sbt._
 import com.decodified.scalassh.{Command => SshCommand, _}
+import sbt.Load.BuildStructure
 import scala.Console.{RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE}
 
 
 object Utils {
   type Log = String => Unit
 
-  def job(body: => Boolean): Unit = {
+  def job(body: => Boolean) {
     if (!body) sys.error("Did not succeed")
   }
 
@@ -83,15 +84,25 @@ object Utils {
   // an SBT AbstractLogger that logs to /dev/nul
   object NopLogger extends AbstractLogger {
     def getLevel = Level.Error
-    def setLevel(newLevel: Level.Value): Unit = {}
-    def setTrace(flag: Int): Unit = {}
+    def setLevel(newLevel: Level.Value) {}
+    def setTrace(flag: Int) {}
     def getTrace = 0
     def successEnabled = false
-    def setSuccessEnabled(flag: Boolean): Unit = {}
-    def control(event: ControlEvent.Value, message: => String): Unit = {}
-    def logAll(events: Seq[LogEvent]): Unit = {}
-    def trace(t: => Throwable): Unit = {}
-    def success(message: => String): Unit = {}
-    def log(level: Level.Value, message: => String): Unit = {}
+    def setSuccessEnabled(flag: Boolean) {}
+    def control(event: ControlEvent.Value, message: => String) {}
+    def logAll(events: Seq[LogEvent]) {}
+    def trace(t: => Throwable) {}
+    def success(message: => String) {}
+    def log(level: Level.Value, message: => String) {}
+  }
+
+  def aggregatedProjects(structure: BuildStructure)(project: ProjectDefinition[_ <: ProjectReference]): Set[String] = {
+    def resolve(p: ProjectReference): ResolvedProject = p match {
+      case LocalProject(projectId) => structure.allProjects.find(_.id == projectId).get
+      case ProjectRef(uri, p) => structure.units(uri).defined(p)
+      case x => throw new IllegalStateException("Can't handle "+x)
+    }
+
+    Set(project.id) ++ project.aggregate.map(resolve).flatMap(aggregatedProjects(structure))
   }
 }

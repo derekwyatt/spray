@@ -86,10 +86,10 @@ class DirectiveExamplesSpec extends Specification with Specs2RouteTest {
 
   "example-8" in {
     val orderGetOrPut = path("order" / IntNumber) & (get | put)
-    val method = extract(_.request.method)
+    val requestMethod = extract(_.request.method)
     val route =
       orderGetOrPut { id =>
-        method { m =>
+        requestMethod { m =>
           complete("Received " + m + " request for order " + id)
         }
       }
@@ -98,9 +98,9 @@ class DirectiveExamplesSpec extends Specification with Specs2RouteTest {
 
   "example-9" in {
     val orderGetOrPut = path("order" / IntNumber) & (get | put)
-    val method = extract(_.request.method)
+    val requestMethod = extract(_.request.method)
     val route =
-      (orderGetOrPut & method) { (id, m) =>
+      (orderGetOrPut & requestMethod) { (id, m) =>
         complete("Received " + m + " request for order " + id)
       }
     verify(route) // hide
@@ -117,8 +117,8 @@ class DirectiveExamplesSpec extends Specification with Specs2RouteTest {
   }
 
   def verify(route: Route) = {
-    Get("/order/42") ~> route ~> check { entityAs[String] === "Received GET request for order 42" }
-    Put("/order/42") ~> route ~> check { entityAs[String] === "Received PUT request for order 42" }
+    Get("/order/42") ~> route ~> check { responseAs[String] === "Received GET request for order 42" }
+    Put("/order/42") ~> route ~> check { responseAs[String] === "Received PUT request for order 42" }
     Get("/") ~> route ~> check { handled must beFalse }
   }
 }

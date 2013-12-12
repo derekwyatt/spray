@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 package spray.httpx
 
-import akka.event.LoggingAdapter
+import akka.event.{ Logging, LoggingAdapter }
 import spray.httpx.unmarshalling._
 import spray.httpx.encoding.Decoder
 import spray.http._
@@ -27,16 +27,16 @@ trait ResponseTransformation extends TransformerPipelineSupport {
   def decode(decoder: Decoder): ResponseTransformer =
     response ⇒ if (response.encoding == decoder.encoding) decoder.decode(response) else response
 
-  def unmarshal[T: Unmarshaller]: HttpResponse ⇒ T =
+  def unmarshal[T: FromResponseUnmarshaller]: HttpResponse ⇒ T =
     response ⇒
       if (response.status.isSuccess)
-        response.entity.as[T] match {
+        response.as[T] match {
           case Right(value) ⇒ value
           case Left(error)  ⇒ throw new PipelineException(error.toString)
         }
       else throw new UnsuccessfulResponseException(response)
 
-  def logResponse(log: LoggingAdapter) = logValue[HttpResponse](log)
+  def logResponse(log: LoggingAdapter, level: Logging.LogLevel = Logging.DebugLevel) = logValue[HttpResponse](log, level)
 
   def logResponse(logFun: HttpResponse ⇒ Unit) = logValue[HttpResponse](logFun)
 }
@@ -45,4 +45,4 @@ object ResponseTransformation extends ResponseTransformation
 
 class PipelineException(message: String, cause: Throwable = null) extends RuntimeException(message, cause)
 class UnsuccessfulResponseException(val response: HttpResponse) extends RuntimeException(s"Status: ${response.status}\n" +
-  s"Body: ${if (response.entity.buffer.length < 1024) response.entity.asString else response.entity.buffer.length + " bytes"}")
+  s"Body: ${if (response.entity.data.length < 1024) response.entity.asString else response.entity.data.length + " bytes"}")

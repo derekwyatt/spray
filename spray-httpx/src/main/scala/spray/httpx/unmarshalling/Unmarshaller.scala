@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,5 +38,29 @@ object Unmarshaller {
   def forNonEmpty[T](implicit um: Unmarshaller[T]): Unmarshaller[T] =
     new Unmarshaller[T] {
       def apply(entity: HttpEntity) = if (entity.isEmpty) Left(ContentExpected) else um(entity)
+    }
+
+  def unmarshaller[T](implicit um: Unmarshaller[T]) = um
+
+  def unmarshal[T: Unmarshaller](entity: HttpEntity): Deserialized[T] = unmarshaller.apply(entity)
+  def unmarshalUnsafe[T: Unmarshaller](entity: HttpEntity): T = unmarshaller.apply(entity) match {
+    case Right(value) ⇒ value
+    case Left(error)  ⇒ sys.error(error.toString)
+  }
+
+  def oneOf[T](unmarshallers: Unmarshaller[T]*): Unmarshaller[T] =
+    new Unmarshaller[T] {
+      def apply(entity: HttpEntity): Deserialized[T] = {
+        def tryNext(unmarshallers: Seq[Unmarshaller[T]]): Deserialized[T] = unmarshallers match {
+          case head +: tail ⇒ head(entity).left.flatMap(_ ⇒ tryNext(tail))
+          case Nil ⇒
+            def tpeString = entity match {
+              case HttpEntity.NonEmpty(tpe, _) ⇒ tpe.value
+              case HttpEntity.Empty            ⇒ "an empty entity"
+            }
+            Left(UnsupportedContentType("Can't unmarshal from " + tpeString))
+        }
+        tryNext(unmarshallers)
+      }
     }
 }

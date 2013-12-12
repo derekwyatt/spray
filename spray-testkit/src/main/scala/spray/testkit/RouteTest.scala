@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ package spray.testkit
 
 import com.typesafe.config.{ ConfigFactory, Config }
 import scala.util.DynamicVariable
-import scala.util.control.NonFatal
 import scala.reflect.ClassTag
 import org.scalatest.Suite
 import akka.actor.ActorSystem
@@ -49,22 +48,25 @@ trait RouteTest extends RequestBuilding with RouteResultComponent {
     if (dynRR.value == null) sys.error("This value is only available inside of a `check` construct!")
   }
 
-  def check[T](body: ⇒ T): RouteResult ⇒ T = dynRR.withValue(_)(body)
+  def check[T](body: ⇒ T): RouteResult ⇒ T = result ⇒ dynRR.withValue(result.awaitResult)(body)
 
   private def result = { assertInCheck(); dynRR.value }
   def handled: Boolean = result.handled
   def response: HttpResponse = result.response
   def entity: HttpEntity = response.entity
+  @deprecated("Use `responseAs` instead.", "1.0/1.1/1.2-RC1")
   def entityAs[T: Unmarshaller: ClassTag]: T = entity.as[T].fold(error ⇒ failTest("Could not unmarshal response " +
     s"to type '${implicitly[ClassTag[T]]}' for `entityAs` assertion: $error\n\nResponse was: $response"), identityFunc)
-  def body: HttpBody = entity.toOption getOrElse failTest("Response has no body")
+  def responseAs[T: FromResponseUnmarshaller: ClassTag]: T = response.as[T].fold(error ⇒ failTest("Could not unmarshal response " +
+    s"to type '${implicitly[ClassTag[T]]}' for `responseAs` assertion: $error\n\nResponse was: $response"), identityFunc)
+  def body: HttpEntity.NonEmpty = entity.toOption getOrElse failTest("Response has no body")
   def contentType: ContentType = body.contentType
   def mediaType: MediaType = contentType.mediaType
   def charset: HttpCharset = contentType.charset
   def definedCharset: Option[HttpCharset] = contentType.definedCharset
   def headers: List[HttpHeader] = response.headers
   def header[T <: HttpHeader: ClassTag]: Option[T] = response.header[T]
-  def header(name: String): Option[HttpHeader] = response.headers.mapFind(h ⇒ if (h.name == name) Some(h) else None)
+  def header(name: String): Option[HttpHeader] = response.headers.find(_.is(name.toLowerCase))
   def status: StatusCode = response.status
   def chunks: List[MessageChunk] = result.chunks
   def closingExtension: String = result.closingExtension
@@ -74,6 +76,13 @@ trait RouteTest extends RequestBuilding with RouteResultComponent {
     val r = rejections
     if (r.size == 1) r.head else failTest("Expected a single rejection but got %s (%s)".format(r.size, r))
   }
+
+  /**
+   * A dummy that can be used as `~> runRoute` to run the route but without blocking for the result.
+   * The result of the pipeline is the result that can later be checked with `check`. See the
+   * "separate running route from checking" example from ScalatestRouteTestSpec.scala.
+   */
+  def runRoute: RouteResult ⇒ RouteResult = identity
 
   // there is already an implicit class WithTransformation in scope (inherited from spray.httpx.TransformerPipelineSupport)
   // however, this one takes precedence
@@ -86,27 +95,33 @@ trait RouteTest extends RequestBuilding with RouteResultComponent {
     def apply(request: HttpRequest, f: A ⇒ B): Out
   }
 
+  case class DefaultHostInfo(host: HttpHeaders.Host, securedConnection: Boolean)
+  object DefaultHostInfo {
+    implicit def defaultHost: DefaultHostInfo =
+      DefaultHostInfo(HttpHeaders.Host("example.com"), securedConnection = false)
+  }
   object TildeArrow {
     implicit object InjectIntoRequestTransformer extends TildeArrow[HttpRequest, HttpRequest] {
       type Out = HttpRequest
       def apply(request: HttpRequest, f: HttpRequest ⇒ HttpRequest) = f(request)
     }
-    implicit def injectIntoRoute(implicit timeout: RouteTestTimeout, settings: RoutingSettings, log: LoggingContext) =
+    implicit def injectIntoRoute(implicit timeout: RouteTestTimeout, settings: RoutingSettings,
+                                 log: LoggingContext, eh: ExceptionHandler, defaultHostInfo: DefaultHostInfo) =
       new TildeArrow[RequestContext, Unit] {
         type Out = RouteResult
         def apply(request: HttpRequest, route: Route) = {
           val routeResult = new RouteResult(timeout.duration)
           val effectiveRequest =
-            try request.withEffectiveUri(securedConnection = false)
-            catch { case NonFatal(_) ⇒ request }
-          ExecutionDirectives.handleExceptions(ExceptionHandler.default)(route) {
+            request.withEffectiveUri(
+              securedConnection = defaultHostInfo.securedConnection,
+              defaultHostHeader = defaultHostInfo.host)
+          ExecutionDirectives.handleExceptions(eh orElse ExceptionHandler.default)(route) {
             RequestContext(
               request = effectiveRequest,
               responder = routeResult.handler,
               unmatchedPath = effectiveRequest.uri.path)
           }
-          // since the route might detach we block until the route actually completes or times out
-          routeResult.awaitResult
+          routeResult
         }
       }
   }

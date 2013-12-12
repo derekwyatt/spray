@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@
  */
 package spray.can.server
 
-import java.util.concurrent.atomic.AtomicLong
 import scala.annotation.tailrec
 import scala.concurrent.duration._
 import spray.http.{ Timedout, HttpMessageStart }
@@ -23,18 +22,19 @@ import spray.can.rendering.ResponsePartRenderingContext
 import spray.can.server.RequestParsing.HttpMessageStartEvent
 import spray.io._
 import spray.can.Http
+import spray.util.{ Timestamp, PaddedAtomicLong }
 
-object StatsSupport {
+private object StatsSupport {
 
   class StatsHolder {
-    val startTimestamp = System.currentTimeMillis
-    val requestStarts = new AtomicLong
-    val responseStarts = new AtomicLong
-    val maxOpenRequests = new AtomicLong
-    val connectionsOpened = new AtomicLong
-    val connectionsClosed = new AtomicLong
-    val maxOpenConnections = new AtomicLong
-    val requestTimeouts = new AtomicLong
+    val startTimestamp = Timestamp.now
+    val requestStarts = new PaddedAtomicLong
+    val responseStarts = new PaddedAtomicLong
+    val maxOpenRequests = new PaddedAtomicLong
+    val connectionsOpened = new PaddedAtomicLong
+    val connectionsClosed = new PaddedAtomicLong
+    val maxOpenConnections = new PaddedAtomicLong
+    val requestTimeouts = new PaddedAtomicLong
 
     @tailrec
     final def adjustMaxOpenConnections(): Unit = {
@@ -57,7 +57,7 @@ object StatsSupport {
     }
 
     def toStats = Stats(
-      uptime = (System.currentTimeMillis - startTimestamp) millis span,
+      uptime = (Timestamp.now - startTimestamp).asInstanceOf[FiniteDuration],
       totalRequests = requestStarts.get,
       openRequests = requestStarts.get - responseStarts.get,
       maxOpenRequests = maxOpenRequests.get,

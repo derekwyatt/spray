@@ -5,10 +5,11 @@ import com.typesafe.sbt.SbtScalariform.ScalariformKeys
 import sbtassembly.Plugin.AssemblyKeys._
 import sbtassembly.Plugin._
 import spray.revolver.RevolverPlugin.Revolver
-import twirl.sbt.TwirlPlugin.Twirl
+import com.typesafe.sbt.osgi.SbtOsgi
+import SbtOsgi._
 
 object BuildSettings {
-  val VERSION = "1.1-SNAPSHOT"
+  val VERSION = "1.2.0"
 
   lazy val basicSettings = seq(
     version               := NightlyBuildSupport.buildVersion(VERSION),
@@ -19,7 +20,7 @@ object BuildSettings {
                              "web services on top of Akka",
     startYear             := Some(2011),
     licenses              := Seq("Apache 2" -> new URL("http://www.apache.org/licenses/LICENSE-2.0.txt")),
-    scalaVersion          := "2.10.2",
+    scalaVersion          := "2.10.3",
     resolvers             ++= Dependencies.resolutionRepos,
     scalacOptions         := Seq(
       "-encoding", "utf8",
@@ -78,9 +79,6 @@ object BuildSettings {
     }
   )
 
-  lazy val siteSettings = basicSettings ++ formatSettings ++ noPublishing ++ Twirl.settings ++ Revolver.settings ++
-    SiteSupport.settings
-
   lazy val docsSettings = basicSettings ++ noPublishing ++ seq(
     unmanagedSourceDirectories in Test <<= baseDirectory { _ ** "code" get }
   )
@@ -120,5 +118,16 @@ object BuildSettings {
       .setPreference(AlignParameters, true)
       .setPreference(AlignSingleLineCaseStatements, true)
       .setPreference(DoubleIndentClassDeclaration, true)
+
+  def osgiSettings(exports: Seq[String], imports: Seq[String] = Seq.empty) =
+    SbtOsgi.osgiSettings ++ Seq(
+      OsgiKeys.exportPackage := exports map { pkg => pkg + ".*;version=\"${Bundle-Version}\"" },
+      OsgiKeys.importPackage <<= scalaVersion { sv => Seq("""scala.*;version="$<range;[==,=+);%s>"""".format(sv)) },
+      OsgiKeys.importPackage ++= imports,
+      OsgiKeys.importPackage += "akka.spray.*;version=\"${Bundle-Version}\"",
+      OsgiKeys.importPackage += """akka.*;version="$<range;[==,=+);$<@>>"""",
+      OsgiKeys.importPackage += "*",
+      OsgiKeys.additionalHeaders := Map("-removeheaders" -> "Include-Resource,Private-Package")
+    )
 
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,8 +21,7 @@ import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.{ Failure, Success }
 import akka.actor.{ Status, ActorRef }
 import akka.spray.UnregisteredActorRef
-import spray.httpx.marshalling.{ MarshallingContext, Marshaller }
-import spray.util._
+import spray.httpx.marshalling._
 import spray.http._
 import StatusCodes._
 import HttpHeaders._
@@ -206,57 +205,37 @@ case class RequestContext(request: HttpRequest, responder: ActorRef, unmatchedPa
    * Completes the request with redirection response of the given type to the given URI.
    */
   def redirect(uri: Uri, redirectionType: Redirection): Unit =
+    //# redirect-implementation
     complete {
       HttpResponse(
         status = redirectionType,
         headers = Location(uri) :: Nil,
         entity = redirectionType.htmlTemplate match {
-          case ""       ⇒ EmptyEntity
+          case ""       ⇒ HttpEntity.Empty
           case template ⇒ HttpEntity(`text/html`, template format uri)
         })
     }
-
-  /**
-   * Completes the request with the given status code and its default message as the response entity.
-   */
-  def complete(status: StatusCode): Unit =
-    complete(HttpResponse(status, entity = status.defaultMessage))
+  //#
 
   /**
    * Completes the request with status "200 Ok" and the response entity created by marshalling the given object using
    * the in-scope marshaller for the type.
    */
-  def complete[T: Marshaller](obj: T): Unit =
-    complete(OK, obj)
-
-  /**
-   * Completes the request with the given status and the response entity created by marshalling the given object using
-   * the in-scope marshaller for the type.
-   */
-  def complete[T: Marshaller](status: StatusCode, obj: T): Unit =
-    complete(status, Nil, obj)
-
-  /**
-   * Completes the request with the given status, headers and the response entity created by marshalling the
-   * given object using the in-scope marshaller for the type.
-   */
-  def complete[T](status: StatusCode, headers: List[HttpHeader], obj: T)(implicit marshaller: Marshaller[T]): Unit =
-    marshaller(obj, marshallingContext(status, headers))
-
-  /**
-   * Completes the request with the given [[spray.http.HttpResponse]].
-   */
-  def complete(response: HttpResponse): Unit =
-    responder ! response
-
-  /**
-   * Schedules the completion of the request with result of the given future.
-   */
-  def complete(future: Future[HttpResponse])(implicit ec: ExecutionContext): Unit =
-    future.onComplete {
-      case Success(response) ⇒ complete(response)
-      case Failure(error)    ⇒ failWith(error)
+  def complete[T](obj: T)(implicit marshaller: ToResponseMarshaller[T]): Unit = {
+    val ctx = new ToResponseMarshallingContext {
+      def tryAccept(contentTypes: Seq[ContentType]) = request.acceptableContentType(contentTypes)
+      def rejectMarshalling(onlyTo: Seq[ContentType]): Unit = reject(UnacceptedResponseContentTypeRejection(onlyTo))
+      def marshalTo(response: HttpResponse): Unit = responder ! response
+      def handleError(error: Throwable): Unit = failWith(error)
+      def startChunkedMessage(response: HttpResponse, sentAck: Option[Any])(implicit sender: ActorRef) = {
+        val chunkStart = ChunkedResponseStart(response)
+        val wrapper = if (sentAck.isEmpty) chunkStart else Confirmed(chunkStart, sentAck.get)
+        responder.tell(wrapper, sender)
+        responder
+      }
     }
+    marshaller(obj, ctx)
+  }
 
   /**
    * Bubbles the given error up the response chain where it is dealt with by the closest `handleExceptions`
@@ -269,24 +248,6 @@ case class RequestContext(request: HttpRequest, responder: ActorRef, unmatchedPa
         case RejectionError(rejection) ⇒ Rejected(rejection :: Nil)
         case x                         ⇒ Status.Failure(x)
       }
-    }
-
-  /**
-   * Creates a MarshallingContext using the given status code and response headers.
-   */
-  def marshallingContext(status: StatusCode, headers: List[HttpHeader]): MarshallingContext =
-    new MarshallingContext {
-      def tryAccept(contentType: ContentType) = request.acceptableContentType(contentType)
-      def rejectMarshalling(onlyTo: Seq[ContentType]): Unit = { reject(UnacceptedResponseContentTypeRejection(onlyTo)) }
-      def marshalTo(entity: HttpEntity): Unit = { complete(response(entity)) }
-      def handleError(error: Throwable): Unit = { failWith(error) }
-      def startChunkedMessage(entity: HttpEntity, sentAck: Option[Any])(implicit sender: ActorRef) = {
-        val chunkStart = ChunkedResponseStart(response(entity))
-        val wrapper = if (sentAck.isEmpty) chunkStart else Confirmed(chunkStart, sentAck.get)
-        responder.tell(wrapper, sender)
-        responder
-      }
-      def response(entity: HttpEntity) = HttpResponse(status, entity, headers)
     }
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,18 +25,29 @@ package object unmarshalling {
   type FromStringOptionDeserializer[T] = Deserializer[Option[String], T]
   type Unmarshaller[T] = Deserializer[HttpEntity, T]
   type FromEntityOptionUnmarshaller[T] = Deserializer[Option[HttpEntity], T]
-
-  def unmarshal[T](implicit um: Unmarshaller[T]) = um
-  def unmarshalUnsafe[T: Unmarshaller](entity: HttpEntity): T = unmarshal.apply(entity) match {
-    case Right(value) ⇒ value
-    case Left(error)  ⇒ sys.error(error.toString)
-  }
+  type FromBodyPartOptionUnmarshaller[T] = Deserializer[Option[BodyPart], T]
+  type FromMessageUnmarshaller[T] = Deserializer[HttpMessage, T] // source-quote-FromMessageUnmarshaller
+  type FromRequestUnmarshaller[T] = Deserializer[HttpRequest, T] // source-quote-FromRequestUnmarshaller
+  type FromResponseUnmarshaller[T] = Deserializer[HttpResponse, T] // source-quote-FromResponseUnmarshaller
 
   implicit def formFieldExtractor(form: HttpForm) = FormFieldExtractor(form)
-  implicit def pimpHttpEntity(entity: HttpEntity) = new PimpedHttpEntity(entity)
-  implicit def pimpHttpBodyPart(bodyPart: BodyPart) = new PimpedHttpEntity(bodyPart.entity)
+  implicit def pimpBodyPart(bodyPart: BodyPart) = new PimpedHttpEntity(bodyPart.entity)
 
-  class PimpedHttpEntity(entity: HttpEntity) {
+  // TODO: remove the following pimps after merging spray-http and spray-httpx
+
+  implicit class PimpedHttpEntity(entity: HttpEntity) {
     def as[T](implicit unmarshaller: Unmarshaller[T]): Deserialized[T] = unmarshaller(entity)
+  }
+
+  implicit class PimpedHttpMessage(msg: HttpMessage) {
+    def as[T](implicit unmarshaller: FromMessageUnmarshaller[T]): Deserialized[T] = unmarshaller(msg)
+  }
+
+  implicit class PimpedHttpRequest(request: HttpRequest) {
+    def as[T](implicit unmarshaller: FromRequestUnmarshaller[T]): Deserialized[T] = unmarshaller(request)
+  }
+
+  implicit class PimpedHttpResponse(response: HttpResponse) {
+    def as[T](implicit unmarshaller: FromResponseUnmarshaller[T]): Deserialized[T] = unmarshaller(response)
   }
 }

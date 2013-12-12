@@ -15,7 +15,7 @@ Apart from the Scala library (see :ref:`Current Versions` chapter) *spray-can* d
 - :ref:`spray-http`
 - :ref:`spray-util`
 - :ref:`spray-io` (only required until the upgrade to Akka 2.2, will go away afterwards)
-- akka-actor 2.1.x (with 'provided' scope, i.e. you need to pull it in yourself)
+- akka-actor 2.2.x (with 'provided' scope, i.e. you need to pull it in yourself)
 - the Servlet-3.0 API (with 'provided' scope, usually automatically available from your servlet container)
 
 
@@ -114,7 +114,6 @@ However, the different response parts of a chunked response need to be sent to t
 
 .. caution:: Since the ``ActorRef`` used as the sender of a request is an UnregisteredActorRef_ it is not
    reachable remotely. This means that the service actor needs to live in the same JVM as the connector servlet.
-   This will be changed before the 1.1 final release.
 
 .. _UnregisteredActorRef: /documentation/1.1-M7/spray-util/#unregisteredactorref
 
@@ -188,6 +187,17 @@ and *not* written through to the servlet container (as the connector servlet set
    (like *spray-routing*) only work with the Content-Type value contained in the ``HttpEntity``.
 
 
+Accessing HttpServletRequest
+----------------------------
+
+If your application needs access to the ``javax.servlet.http.HttpServletRequest``, the ``spray.servlet.servlet-request-access``
+setting can be set to ``on``. This results in the connector servlet adding an additional request header of type
+``spray.servlet.ServletRequestInfoHeader``. This allows the service actor (or directives) to access
+members of ``HttpServletRequest`` that are not in ``HttpRequest``. This is necessary when working with container
+managed security and access to the authenticated principal is required (via ``getUserPrincipal``) or when accessing
+an authenticated client SSL certificate (via ``getAttribute("javax.servlet.request.X509Certificate")``).
+
+
 Differences to spray-can
 ------------------------
 
@@ -232,7 +242,7 @@ Example
 The `/examples/spray-servlet/`__ directory of the *spray* repository
 contains a number of example projects for *spray-servlet*.
 
-.. __: https://github.com/spray/spray/tree/release/1.1/examples/spray-servlet
+.. __: https://github.com/spray/spray/tree/release/1.2/examples/spray-servlet
 
 
 simple-spray-servlet-server

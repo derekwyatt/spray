@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,11 +24,15 @@ import BasicRules._
 private[parser] trait AdditionalRules {
   this: Parser ⇒
 
-  def Ip: Rule1[HttpIp] = rule(
-    group(IpNumber ~ ch('.') ~ IpNumber ~ ch('.') ~ IpNumber ~ ch('.') ~ IpNumber) ~> (HttpIp(_)) ~ OptWS)
+  def Ip: Rule1[RemoteAddress] = rule {
+    IPv4Address ~~> ((a, b, c, d) ⇒ RemoteAddress(Array(a, b, c, d)))
+  }
 
-  def IpNumber = rule {
-    Digit ~ optional(Digit ~ optional(Digit))
+  def Challenge = rule {
+    AuthScheme ~ zeroOrMore(AuthParam, separator = ListSep) ~~> { (scheme, params) ⇒
+      val (realms, otherParams) = params.partition(_._1 equalsIgnoreCase "realm")
+      HttpChallenge(scheme, realms.headOption.map(_._2).getOrElse(""), otherParams.toMap)
+    }
   }
 
   def AuthScheme = rule {
@@ -37,5 +41,14 @@ private[parser] trait AdditionalRules {
 
   def AuthParam = rule {
     Token ~ "=" ~ (Token | QuotedString) ~~> ((_, _))
+  }
+
+  def originListOrNull: Rule1[Seq[HttpOrigin]] = rule {
+    "null" ~ push(Nil: Seq[HttpOrigin]) |
+      oneOrMore(origin)
+  }
+
+  def origin: Rule1[HttpOrigin] = rule {
+    oneOrMore(!LWS ~ ANY) ~> (HttpOrigin(_)) // offload to URL parser
   }
 }

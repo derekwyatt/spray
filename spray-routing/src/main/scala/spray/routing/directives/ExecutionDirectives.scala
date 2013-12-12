@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package spray.routing
 package directives
 
+import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.control.NonFatal
 import akka.actor._
 
@@ -65,7 +66,7 @@ trait ExecutionDirectives {
    * Also Note that this directive differs from most other directives in that it cannot be combined with other routes
    * via the usual `&` and `|` operators.
    */
-  def dynamic = dynamicIf(enabled = true)
+  /* directive */ def dynamic: ByNameDirective0 = ExecutionDirectives._dynamic
 
   /**
    * A directive that evaluates its inner Route for every request anew, if the given enabled flag is true.
@@ -76,36 +77,41 @@ trait ExecutionDirectives {
    * Also Note that this directive differs from most other directives in that it cannot be combined with other routes
    * via the usual `&` and `|` operators.
    */
-  case class dynamicIf(enabled: Boolean) {
-    def apply(inner: ⇒ Route): Route =
-      if (enabled) Route(ctx ⇒ inner(ctx)) else inner
+  /* directive */ def dynamicIf(enabled: Boolean): ByNameDirective0 = ByNameDirective0(enabled)
+
+  /**
+   * Executes its inner Route in a `Future`.
+   */
+  def detach(dm: DetachMagnet): Directive0 = {
+    import dm._
+    mapInnerRoute { inner ⇒
+      ctx ⇒
+        Future(inner(ctx)).onFailure { case e ⇒ ctx.failWith(e) }
+    }
   }
-
-  /**
-   * Executes its inner Route in the context of the actor returned by the given function.
-   * Note that the parameter function is re-evaluated for every request anew.
-   */
-  def detachTo(serviceActor: Route ⇒ ActorRef): Directive0 =
-    mapInnerRoute { route ⇒ ctx ⇒ serviceActor(route) ! ctx }
-
-  /**
-   * Returns a function creating a new SingleRequestServiceActor for a given Route.
-   */
-  def singleRequestServiceActor(implicit refFactory: ActorRefFactory): Route ⇒ ActorRef =
-    route ⇒ refFactory.actorOf(Props(new SingleRequestServiceActor(route)))
 }
 
-object ExecutionDirectives extends ExecutionDirectives
+object ExecutionDirectives extends ExecutionDirectives {
+  private val _dynamic = dynamicIf(enabled = true)
+}
+case class ByNameDirective0(enabled: Boolean) {
+  def apply(inner: ⇒ Route): Route =
+    if (enabled) Route(ctx ⇒ inner(ctx)) else inner
+}
 
-/**
- * An HttpService actor that reacts to an incoming RequestContext message by running it in the given Route
- * before shutting itself down.
- */
-class SingleRequestServiceActor(route: Route) extends Actor {
-  def receive = {
-    case ctx: RequestContext ⇒
-      try route(ctx)
-      catch { case NonFatal(e) ⇒ ctx.failWith(e) }
-      finally context.stop(self)
-  }
+class DetachMagnet()(implicit val ec: ExecutionContext)
+
+object DetachMagnet {
+  implicit def fromUnit(u: Unit)(implicit dm2: DetachMagnet2) = new DetachMagnet()(dm2.ec)
+  implicit def fromExecutionContext(ec: ExecutionContext) = new DetachMagnet()(ec)
+}
+
+class DetachMagnet2(val ec: ExecutionContext)
+
+object DetachMagnet2 extends DetachMagnet2LowerPriorityImplicits {
+  implicit def fromImplicitExecutionContext(implicit ec: ExecutionContext) = new DetachMagnet2(ec)
+}
+
+private[directives] abstract class DetachMagnet2LowerPriorityImplicits {
+  implicit def fromImplicitRefFactory(implicit factory: ActorRefFactory) = new DetachMagnet2(factory.dispatcher)
 }

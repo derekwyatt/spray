@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ package akka.spray
 
 import scala.annotation.tailrec
 import akka.util.Unsafe
-import akka.dispatch._
+import akka.dispatch.sysmsg.{ Unwatch, Watch, Terminate, SystemMessage }
 import akka.actor._
 
 /**

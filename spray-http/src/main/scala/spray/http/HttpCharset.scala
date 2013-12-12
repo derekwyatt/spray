@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2011-2012 spray.io
- * Based on code copyright (C) 2010-2011 by the BlueEyes Web Framework Team (http://github.com/jdegoes/blueeyes)
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,14 +18,32 @@ package spray.http
 
 import java.nio.charset.Charset
 
-sealed abstract class HttpCharsetRange extends Renderable {
-  def value: String
+sealed abstract class HttpCharsetRange extends ValueRenderable with WithQValue[HttpCharsetRange] {
+  def qValue: Float
   def matches(charset: HttpCharset): Boolean
 }
 
-case class HttpCharset private[http] (value: String)(val aliases: String*)
-    extends HttpCharsetRange with LazyValueBytesRenderable {
+object HttpCharsetRange {
+  case class `*`(qValue: Float) extends HttpCharsetRange {
+    def render[R <: Rendering](r: R): r.type = if (qValue < 1.0f) r ~~ "*;q=" ~~ qValue else r ~~ '*'
+    def matches(charset: HttpCharset) = true
+    def withQValue(qValue: Float) =
+      if (qValue == 1.0f) `*` else if (qValue != this.qValue) `*`(qValue.toFloat) else this
+  }
+  object `*` extends `*`(1.0f)
 
+  case class One(charset: HttpCharset, qValue: Float) extends HttpCharsetRange {
+    def matches(charset: HttpCharset) = this.charset.value.equalsIgnoreCase(charset.value)
+    def withQValue(qValue: Float) = One(charset, qValue)
+    def render[R <: Rendering](r: R): r.type = if (qValue < 1.0f) r ~~ charset ~~ ";q=" ~~ qValue else r ~~ charset
+  }
+
+  implicit def apply(charset: HttpCharset): HttpCharsetRange = apply(charset, 1.0f)
+  def apply(charset: HttpCharset, qValue: Float): HttpCharsetRange = One(charset, qValue)
+}
+
+case class HttpCharset private[http] (value: String)(val aliases: Seq[String])
+    extends LazyValueBytesRenderable with WithQValue[HttpCharsetRange] {
   @transient private[this] var _nioCharset: Charset = Charset.forName(value)
   def nioCharset: Charset = _nioCharset
 
@@ -35,14 +52,15 @@ case class HttpCharset private[http] (value: String)(val aliases: String*)
     _nioCharset = Charset.forName(value)
   }
 
-  def matches(charset: HttpCharset) = this == charset
+  def withQValue(qValue: Float): HttpCharsetRange = HttpCharsetRange(this, qValue.toFloat)
 }
 
 object HttpCharset {
   def custom(value: String, aliases: String*): Option[HttpCharset] =
-    try Some(HttpCharset(value)(aliases: _*))
+    try Some(HttpCharset(value)(aliases))
     catch {
-      case e: java.nio.charset.UnsupportedCharsetException ⇒ None
+      // per documentation all exceptions thrown by `Charset.forName` are IllegalArgumentExceptions
+      case e: IllegalArgumentException ⇒ None
     }
 }
 
@@ -54,12 +72,11 @@ object HttpCharsets extends ObjectRegistry[String, HttpCharset] {
     register(charset.value.toLowerCase, charset)
   }
 
-  case object `*` extends HttpCharsetRange with SingletonValueRenderable {
-    def matches(charset: HttpCharset) = true
-  }
+  @deprecated("Use HttpCharsetRange.`*` instead", "1.x-RC3")
+  val `*`: HttpCharsetRange = HttpCharsetRange.`*`
 
   private def register(value: String)(aliases: String*): HttpCharset =
-    register(HttpCharset(value)(aliases: _*))
+    register(HttpCharset(value)(aliases))
 
   private def tryRegister(value: String)(aliases: String*): Unit =
     try register(value)(aliases: _*)

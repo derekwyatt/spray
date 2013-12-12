@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,8 @@ import spray.http._
 import HttpHeaders._
 import HttpMethods._
 import HttpProtocols._
+import MediaTypes._
+import spray.can.TestSupport
 
 class ResponseRendererSpec extends mutable.Specification with DataTables {
 
@@ -67,12 +69,41 @@ class ResponseRendererSpec extends mutable.Specification with DataTables {
           """HTTP/1.1 400 Bad Request
             |Server: spray-can/1.0.0
             |Date: Thu, 25 Aug 2011 09:10:29 GMT
-            |Content-Type: text/plain
+            |Age: 30
+            |Content-Type: text/plain; charset=UTF-8
+            |Connection: Keep-Alive
+            |Content-Length: 23
+            |
+            |Small f*ck up overhere!"""
+        } -> false
+      }
+
+      "a response with status 400, a few headers and a body with an explicitly suppressed Content Type header" in new TestSetup() {
+        render {
+          HttpResponse(
+            status = 400,
+            headers = List(RawHeader("Age", "30"), Connection("Keep-Alive")),
+            entity = HttpEntity(contentType = ContentTypes.NoContentType, "Small f*ck up overhere!"))
+        } === result {
+          """HTTP/1.1 400 Bad Request
+            |Server: spray-can/1.0.0
+            |Date: Thu, 25 Aug 2011 09:10:29 GMT
             |Age: 30
             |Connection: Keep-Alive
             |Content-Length: 23
             |
             |Small f*ck up overhere!"""
+        } -> false
+      }
+
+      "a response with a custom status code, no headers and no body" in new TestSetup() {
+        render(HttpResponse(TestSupport.ServerOnTheMove)) === result {
+          """HTTP/1.1 330 Server on the move
+            |Server: spray-can/1.0.0
+            |Date: Thu, 25 Aug 2011 09:10:29 GMT
+            |Content-Length: 0
+            |
+            |"""
         } -> false
       }
 
@@ -84,8 +115,8 @@ class ResponseRendererSpec extends mutable.Specification with DataTables {
             """HTTP/1.1 200 OK
             |Server: spray-can/1.0.0
             |Date: Thu, 25 Aug 2011 09:10:29 GMT
-            |Content-Type: text/plain
             |Age: 30
+            |Content-Type: text/plain; charset=UTF-8
             |Connection: Keep-Alive
             |Content-Length: 23
             |
@@ -112,7 +143,7 @@ class ResponseRendererSpec extends mutable.Specification with DataTables {
           """HTTP/1.1 200 OK
             |Server: spray-can/1.0.0
             |Date: Thu, 25 Aug 2011 09:10:29 GMT
-            |Content-Type: text/plain
+            |Content-Type: text/plain; charset=UTF-8
             |Transfer-Encoding: chunked
             |
             |7
@@ -122,7 +153,7 @@ class ResponseRendererSpec extends mutable.Specification with DataTables {
       }
 
       "a response chunk" in new TestSetup() {
-        render(MessageChunk("body123".getBytes("ISO-8859-1"), """key=value;another="tl;dr"""")) === result {
+        render(MessageChunk(HttpData("body123".getBytes), """key=value;another="tl;dr"""")) === result {
           """7;key=value;another="tl;dr"
             |body123
             |"""
@@ -139,30 +170,40 @@ class ResponseRendererSpec extends mutable.Specification with DataTables {
         } -> false
       }
 
-      "a chunkless chunked response without body" in new TestSetup(chunklessStreaming = true) {
-        render(response = ChunkedResponseStart(HttpResponse(200, headers = List(RawHeader("Age", "30"))))) === result {
-          """HTTP/1.1 200 OK
-            |Server: spray-can/1.0.0
-            |Date: Thu, 25 Aug 2011 09:10:29 GMT
-            |Age: 30
-            |
-            |"""
-        } -> false
-      }
+      "a chunkless chunked response without body and explicit Content-Type" in
+        new TestSetup(chunklessStreaming = true) {
+          render {
+            ChunkedResponseStart(HttpResponse(200, headers = List(RawHeader("Age", "30"), `Content-Type`(`text/plain`))))
+          } === result {
+            """HTTP/1.1 200 OK
+              |Server: spray-can/1.0.0
+              |Date: Thu, 25 Aug 2011 09:10:29 GMT
+              |Age: 30
+              |Content-Type: text/plain
+              |
+              |"""
+          } -> false
+        }
 
-      "a chunkless chunked response with body" in new TestSetup(chunklessStreaming = true) {
-        render(response = ChunkedResponseStart(HttpResponse(entity = "Yahoooo"))) === result {
-          """HTTP/1.1 200 OK
-            |Server: spray-can/1.0.0
-            |Date: Thu, 25 Aug 2011 09:10:29 GMT
-            |Content-Type: text/plain
-            |
-            |Yahoooo"""
-        } -> false
-      }
+      "a chunkless chunked response with body and explicit Content-Length" in
+        new TestSetup(chunklessStreaming = true) {
+          render {
+            ChunkedResponseStart(HttpResponse(entity = "Yahoooo", headers = List(`Content-Length`(1000))))
+          } === result {
+            """HTTP/1.1 200 OK
+              |Server: spray-can/1.0.0
+              |Date: Thu, 25 Aug 2011 09:10:29 GMT
+              |Content-Length: 1000
+              |Content-Type: text/plain; charset=UTF-8
+              |Connection: close
+              |
+              |Yahoooo"""
+          } -> false
+        }
 
       "a chunkless response chunk" in new TestSetup(chunklessStreaming = true) {
-        render(response = MessageChunk("body123".getBytes("ISO-8859-1"), """key=value;another="tl;dr"""")) === result {
+        render(response = MessageChunk(HttpData("body123".getBytes),
+          """key=value;another="tl;dr"""")) === result {
           "body123"
         } -> false
       }

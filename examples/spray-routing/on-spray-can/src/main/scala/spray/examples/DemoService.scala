@@ -3,7 +3,7 @@ package spray.examples
 import java.io.File
 import org.parboiled.common.FileUtils
 import scala.concurrent.duration._
-import akka.actor.{Props, Actor}
+import akka.actor._
 import akka.pattern.ask
 import spray.routing.{HttpService, RequestContext}
 import spray.routing.directives.CachingDirectives
@@ -15,7 +15,6 @@ import spray.util._
 import spray.http._
 import MediaTypes._
 import CachingDirectives._
-
 
 // we don't implement our route structure directly in the service actor because
 // we want to be able to test it independently, without having to spin up an actor
@@ -40,18 +39,16 @@ trait DemoService extends HttpService {
 
   val demoRoute = {
     get {
-      path("") {
-        respondWithMediaType(`text/html`) { // XML is marshalled to `text/xml` by default, so we simply override here
-          complete(index)
-        }
+      pathSingleSlash {
+        complete(index)
       } ~
       path("ping") {
         complete("PONG!")
       } ~
       path("stream1") {
-        respondWithMediaType(`text/html`) {
-          // we detach in order to move the blocking code inside the simpleStringStream off the service actor
-          detachTo(singleRequestServiceActor) {
+        // we detach in order to move the blocking code inside the simpleStringStream into a future
+        detach() {
+          respondWithMediaType(`text/html`) { // normally Strings are rendered to text/plain, we simply override here
             complete(simpleStringStream)
           }
         }
@@ -144,7 +141,7 @@ trait DemoService extends HttpService {
   def sendStreamingResponse(ctx: RequestContext): Unit =
     actorRefFactory.actorOf {
       Props {
-        new Actor with SprayActorLogging {
+        new Actor with ActorLogging {
           // we use the successful sending of a chunk as trigger for scheduling the next chunk
           val responseStart = HttpResponse(entity = HttpEntity(`text/html`, streamStart))
           ctx.responder ! ChunkedResponseStart(responseStart).withAck(Ok(16))

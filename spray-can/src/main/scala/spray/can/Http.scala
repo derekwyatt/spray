@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,22 +24,31 @@ import akka.actor._
 import spray.can.server.ServerSettings
 import spray.can.client.{ HostConnectorSettings, ClientConnectionSettings }
 import spray.io.{ ConnectionTimeouts, ClientSSLEngineProvider, ServerSSLEngineProvider }
-import spray.http.{ HttpResponse, HttpRequest, HttpMessagePart, HttpMessagePartWrapper }
+import spray.http._
 import spray.util.actorSystem
+import scala.concurrent.duration.Duration
 
 object Http extends ExtensionKey[HttpExt] {
+
+  sealed trait ClientConnectionType
+  object ClientConnectionType {
+    object Direct extends ClientConnectionType
+    object AutoProxied extends ClientConnectionType
+    case class Proxied(proxyHost: String, proxyPort: Int) extends ClientConnectionType
+  }
 
   /// COMMANDS
   type Command = Tcp.Command
 
   case class Connect(remoteAddress: InetSocketAddress,
+                     sslEncryption: Boolean,
                      localAddress: Option[InetSocketAddress],
                      options: immutable.Traversable[Inet.SocketOption],
                      settings: Option[ClientConnectionSettings])(implicit val sslEngineProvider: ClientSSLEngineProvider) extends Command
   object Connect {
-    def apply(host: String, port: Int = 80, localAddress: Option[InetSocketAddress] = None,
+    def apply(host: String, port: Int = 80, sslEncryption: Boolean = false, localAddress: Option[InetSocketAddress] = None,
               options: immutable.Traversable[Inet.SocketOption] = Nil, settings: Option[ClientConnectionSettings] = None)(implicit sslEngineProvider: ClientSSLEngineProvider): Connect =
-      apply(new InetSocketAddress(host, port), localAddress, options, settings)
+      apply(new InetSocketAddress(host, port), sslEncryption, localAddress, options, settings)
   }
 
   case class Bind(listener: ActorRef,
@@ -53,22 +62,19 @@ object Http extends ExtensionKey[HttpExt] {
       apply(listener, new InetSocketAddress(interface, port), backlog, options, settings)
   }
 
-  case class HostConnectorSetup(remoteAddress: InetSocketAddress,
-                                options: immutable.Traversable[Inet.SocketOption],
-                                settings: Option[HostConnectorSettings])(implicit val sslEngineProvider: ClientSSLEngineProvider) extends Command {
+  case class HostConnectorSetup(host: String, port: Int = 80,
+                                sslEncryption: Boolean = false,
+                                options: immutable.Traversable[Inet.SocketOption] = Nil,
+                                settings: Option[HostConnectorSettings] = None,
+                                connectionType: ClientConnectionType = ClientConnectionType.AutoProxied,
+                                defaultHeaders: List[HttpHeader] = Nil)(implicit val sslEngineProvider: ClientSSLEngineProvider) extends Command {
     private[can] def normalized(implicit refFactory: ActorRefFactory) =
       if (settings.isDefined) this
       else copy(settings = Some(HostConnectorSettings(actorSystem)))
   }
   object HostConnectorSetup {
-    def apply(host: String, port: Int = 80, options: immutable.Traversable[Inet.SocketOption] = Nil,
-              settings: Option[HostConnectorSettings] = None)(implicit sslEngineProvider: ClientSSLEngineProvider): HostConnectorSetup =
-      apply(new InetSocketAddress(host, port), options, settings)
-
-    def apply(host: String, port: Int, sslEncryption: Boolean)(implicit refFactory: ActorRefFactory, sslEngineProvider: ClientSSLEngineProvider): HostConnectorSetup = {
-      val connectionSettings = ClientConnectionSettings(actorSystem).copy(sslEncryption = sslEncryption)
-      apply(host, port, settings = Some(HostConnectorSettings(actorSystem).copy(connectionSettings = connectionSettings)))
-    }
+    def apply(host: String, port: Int, sslEncryption: Boolean)(implicit refFactory: ActorRefFactory, sslEngineProvider: ClientSSLEngineProvider): HostConnectorSetup =
+      apply(host, port, sslEncryption, Nil).normalized
   }
 
   type FastPath = PartialFunction[HttpRequest, HttpResponse]
@@ -80,10 +86,11 @@ object Http extends ExtensionKey[HttpExt] {
   }
 
   case class Register(handler: ActorRef,
-                      keepOpenOnPeerClosed: Boolean = false,
                       fastPath: FastPath = EmptyFastPath) extends Command
+  case class RegisterChunkHandler(handler: ActorRef) extends Command
 
-  val Unbind = Tcp.Unbind
+  case class Unbind(timeout: Duration) extends Command
+  object Unbind extends Unbind(Duration.Zero)
 
   type CloseCommand = Tcp.CloseCommand
   val Close = Tcp.Close
@@ -121,6 +128,14 @@ object Http extends ExtensionKey[HttpExt] {
   case class MessageEvent(ev: HttpMessagePart) extends Event
 
   case class HostConnectorInfo(hostConnector: ActorRef, setup: HostConnectorSetup) extends Event
+
+  // exceptions
+  class ConnectionException(message: String) extends RuntimeException(message)
+
+  class ConnectionAttemptFailedException(val host: String, val port: Int) extends ConnectionException(s"Connection attempt to $host:$port failed")
+
+  class RequestTimeoutException(val request: HttpRequestPart with HttpMessageStart, message: String)
+    extends ConnectionException(message)
 }
 
 class HttpExt(system: ExtendedActorSystem) extends akka.io.IO.Extension {

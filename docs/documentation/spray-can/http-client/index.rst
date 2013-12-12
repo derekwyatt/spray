@@ -89,14 +89,17 @@ add them to an outgoing request:
 - ``Content-Length``
 - ``Transfer-Encoding``
 
-There is one exception: for requests with an empty entity *spray-can* will render manually added ``Content-Type``
-headers.
+There are two exceptions for requests in ``ChunkedRequestStart`` messages:
+
+1. They are allowed to contain a user-specified ``Content-Type`` header if their entity is empty.
+2. They *must* contain a user-specified ``Content-Length`` header if ``spray.can.client.chunkless-streaming`` is enabled.
+   This ``Content-Length`` header *must* fit the total length of all requests chunks.
 
 Additionally *spray-can* will render a
 
 - ``Host`` request header if none is explicitly added.
-- ``User-Agent`` header if one is configured. If none is configured an explicitly added added ``User-Agent`` header is
-  also rendered.
+- ``User-Agent`` default request header if none is explicitly defined. The default value can be configured with the
+  ``spray.can.client.user-agent-header`` configuration setting.
 
 .. note:: The ``Content-Type`` header has special status in *spray* since its value is part of the ``HttpEntity`` model
    class. Even though the header also remains in the ``headers`` list of the ``HttpResponse`` *sprays* higher layers
@@ -106,11 +109,18 @@ Additionally *spray-can* will render a
 SSL Support
 -----------
 
-If enabled via the ``ssl-encryption`` config setting the *spray-can* connection actors pipe all IO traffic through an
-``SslTlsSupport`` module, which can perform transparent SSL/TLS encryption. This module is configured via the implicit
+SSL support is enabled
+
+ - for the connection-level API by setting ``Http.Connect(sslEncryption = true)`` when connecting to a server
+ - for the host-level API by setting ``Http.HostConnectorSetup(sslEncryption = true)`` when creating a host connector
+ - for the request-level API by using an ``https`` URL in the request
+
+Particular SSL settings can be configured via the implicit
 ``ClientSSLEngineProvider`` member on the ``Http.Connect`` and ``Http.HostConnectorSetup`` command messages.
 An ``ClientSSLEngineProvider`` is essentially a function ``PipelineContext ⇒ Option[SSLEngine]`` which determines
-whether encryption is to be performed and, if so, which ``javax.net.ssl.SSLEngine`` instance is to be used.
+whether encryption is to be performed and, if so, which ``javax.net.ssl.SSLEngine`` instance is to be used. By returning
+``None`` the ``ClientSSLEngineProvider`` can decide to disable SSL support even if SSL support was requested by the means
+described above.
 
 If you'd like to apply some custom configuration to your ``SSLEngine`` instances an easy way would be to bring a custom
 engine provider into scope, e.g. like this:
@@ -130,3 +140,43 @@ is to simply bring one into scope implicitly:
 .. includecode:: ../code/docs/HttpServerExamplesSpec.scala
    :snippet: sslcontext-provision
 
+
+Redirection Following
+---------------------
+
+Automatic redirection following for ``3xx`` responses is supported by setting configuring the
+``spray.can.host-connector.max-redirects`` setting. This is the logic that is then applied:
+
+ - If set to zero redirection responses will not be followed, i.e. they'll be returned to the user as is.
+ - If set to a value > zero redirection responses will be followed up to the given number of times.
+ - If the redirection chain is longer than the configured value the first redirection response that is
+   is not followed anymore is returned to the user as is.
+
+By default ``max-redirects`` is set to 0.
+
+Since this setting is at the host level, it is possible to configure a different number of ``max-redirects`` for
+different hosts (see :ref:`RequestLevelApi`). In this situation the ``max-redirects`` configured for the host of the
+initial request is respected for the entire redirection chain. This is true even if redirection means changing to another
+host.
+
+Which redirects are followed?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This table shows which http method is used to follow redirects for given request methods and response status codes. Any
+request method and response status code combination not in the table will not result in redirection following and the
+response will be returned as is.
+
+.. rst-class:: table table-striped
+
+======================== ======================= ========================== =================
+Request Method           Response Status Code    Redirection Method         Specification
+======================== ======================= ========================== =================
+GET / HEAD               301 / 302 / 303         Original request method    `RFC 2616`_
+Any (except GET / HEAD)  302 / 303               GET                        `RFC 2616`_
+Any                      307                     Original request method    `HttpBis Draft`_
+Any                      308                     Original request method    `308 Draft`_
+======================== ======================= ========================== =================
+
+.. _RFC 2616: http://tools.ietf.org/html/rfc2616#section-10.3
+.. _HttpBis Draft: https://tools.ietf.org/html/draft-ietf-httpbis-p2-semantics-25#section-6.4.7
+.. _308 Draft: http://tools.ietf.org/html/draft-reschke-http-status-308-07#section-3

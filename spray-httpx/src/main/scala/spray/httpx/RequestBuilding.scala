@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,9 @@
 
 package spray.httpx
 
-import akka.event.LoggingAdapter
+import scala.reflect.ClassTag
+import akka.actor.ActorRef
+import akka.event.{ Logging, LoggingAdapter }
 import spray.httpx.encoding.Encoder
 import spray.httpx.marshalling._
 import spray.http.parser.HttpParser
@@ -34,15 +36,20 @@ trait RequestBuilding extends TransformerPipelineSupport {
     def apply[T: Marshaller](uri: String, content: Option[T]): HttpRequest = apply(Uri(uri), content)
     def apply(uri: Uri): HttpRequest = apply[String](uri, None)
     def apply[T: Marshaller](uri: Uri, content: T): HttpRequest = apply(uri, Some(content))
-    def apply[T: Marshaller](uri: Uri, content: Option[T]): HttpRequest =
-      HttpRequest(method, uri,
-        entity = content match {
-          case None ⇒ EmptyEntity
-          case Some(value) ⇒ marshal(value) match {
-            case Right(entity) ⇒ entity
-            case Left(error)   ⇒ throw error
-          }
-        })
+    def apply[T: Marshaller](uri: Uri, content: Option[T]): HttpRequest = {
+      val ctx = new CollectingMarshallingContext {
+        override def startChunkedMessage(entity: HttpEntity, ack: Option[Any],
+                                         headers: Seq[HttpHeader])(implicit sender: ActorRef) =
+          sys.error("RequestBuilding with marshallers producing chunked requests is not supported")
+      }
+      content match {
+        case None ⇒ HttpRequest(method, uri)
+        case Some(value) ⇒ marshalToEntityAndHeaders(value, ctx) match {
+          case Right((entity, headers)) ⇒ HttpRequest(method, uri, headers.toList, entity)
+          case Left(error)              ⇒ throw error
+        }
+      }
+    }
   }
 
   val Get = new RequestBuilder(GET)
@@ -66,9 +73,27 @@ trait RequestBuilding extends TransformerPipelineSupport {
 
   def addHeaders(headers: List[HttpHeader]): RequestTransformer = _.mapHeaders(headers ::: _)
 
+  def mapHeaders(f: List[HttpHeader] ⇒ List[HttpHeader]): RequestTransformer = _.mapHeaders(f)
+
+  def removeHeader(headerName: String): RequestTransformer = {
+    val selected = (_: HttpHeader).name equalsIgnoreCase headerName
+    _ mapHeaders (_ filterNot selected)
+  }
+
+  def removeHeader[T <: HttpHeader: ClassTag]: RequestTransformer = {
+    val clazz = implicitly[ClassTag[T]].runtimeClass
+    val selected = (header: HttpHeader) ⇒ clazz.isInstance(header)
+    _ mapHeaders (_ filterNot selected)
+  }
+
+  def removeHeaders(names: String*): RequestTransformer = {
+    val selected = (header: HttpHeader) ⇒ names exists (_ equalsIgnoreCase header.name)
+    _ mapHeaders (_ filterNot selected)
+  }
+
   def addCredentials(credentials: HttpCredentials) = addHeader(HttpHeaders.Authorization(credentials))
 
-  def logRequest(log: LoggingAdapter) = logValue[HttpRequest](log)
+  def logRequest(log: LoggingAdapter, level: Logging.LogLevel = Logging.DebugLevel) = logValue[HttpRequest](log, level)
 
   def logRequest(logFun: HttpRequest ⇒ Unit) = logValue[HttpRequest](logFun)
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,8 @@ package spray.can.parsing
 
 import org.specs2.mutable.Specification
 import com.typesafe.config.{ ConfigFactory, Config }
-import akka.util.CompactByteString
+import scala.annotation.tailrec
+import akka.util.ByteString
 import akka.actor.ActorSystem
 import spray.util._
 import spray.http._
@@ -33,8 +34,11 @@ class RequestParserSpec extends Specification {
     akka.event-handlers = ["akka.testkit.TestEventListener"]
     akka.loglevel = WARNING
     spray.can.parsing.max-header-value-length = 32
-    spray.can.parsing.max-uri-length = 20""")
+    spray.can.parsing.max-uri-length = 20
+    spray.can.parsing.max-content-length = 4000000000
+    spray.can.parsing.incoming-auto-chunking-threshold-size = 20""")
   val system = ActorSystem(Utils.actorSystemNameFrom(getClass), testConf)
+  val BOLT = HttpMethods.register(HttpMethod.custom("BOLT", safe = false, idempotent = true, entityAccepted = true))
 
   "The request parsing logic" should {
     "properly parse a request" in {
@@ -43,15 +47,17 @@ class RequestParserSpec extends Specification {
           """|GET / HTTP/1.0
              |
              |"""
-        } === (GET, Uri("/"), `HTTP/1.0`, Nil, "", "", true)
+        } === Seq(GET, Uri("/"), `HTTP/1.0`, Nil, "", 'close)
       }
 
       "with no headers and no body but remaining content" in {
         parse {
-          """|GET / HTTP/1.0
-             |
-             |This is not part of the request!"""
-        } === (GET, Uri("/"), `HTTP/1.0`, Nil, "", "This is not part of the request!", true)
+          """GET / HTTP/1.0
+            |
+            |POST /foo HTTP/1.0
+            |
+            |TRA""" // beginning of TRACE request
+        } === Seq(GET, Uri("/"), `HTTP/1.0`, Nil, "", 'close, POST, Uri("/foo"), `HTTP/1.0`, Nil, "", 'close)
       }
 
       "with one header" in {
@@ -60,7 +66,7 @@ class RequestParserSpec extends Specification {
              |Host: example.com
              |
              |"""
-        } === (GET, Uri("/"), `HTTP/1.1`, List(Host("example.com")), "", "", false)
+        } === Seq(GET, Uri("/"), `HTTP/1.1`, List(Host("example.com")), "", 'dontClose)
       }
 
       "with 3 headers and a body" in {
@@ -71,25 +77,27 @@ class RequestParserSpec extends Specification {
              |Content-length:    17
              |
              |Shake your BOODY!"""
-        } === (POST, Uri("/resource/yes"), `HTTP/1.0`, List(`Content-Length`(17), Connection("keep-alive"),
-          `User-Agent`("curl/7.19.7 xyz")), "Shake your BOODY!", "", false)
+        } === Seq(POST, Uri("/resource/yes"), `HTTP/1.0`, List(`Content-Length`(17), Connection("keep-alive"),
+          `User-Agent`("curl/7.19.7 xyz")), "Shake your BOODY!", 'dontClose)
       }
 
       "with 3 headers, a body and remaining content" in {
         parse {
-          """|POST /resource/yes HTTP/1.0
-             |User-Agent: curl/7.19.7 xyz
-             |Connection:keep-alive
-             |Content-length:    17
-             |
-             |Shake your BOODY!Non-Body-Text"""
-        } === (POST, Uri("/resource/yes"), `HTTP/1.0`, List(`Content-Length`(17), Connection("keep-alive"),
-          `User-Agent`("curl/7.19.7 xyz")), "Shake your BOODY!", "Non-Body-Text", false)
+          """POST /resource/yes HTTP/1.0
+            |User-Agent: curl/7.19.7 xyz
+            |Connection:keep-alive
+            |Content-length:    17
+            |
+            |Shake your BOODY!GET / HTTP/1.0
+            |
+            |"""
+        } === Seq(POST, Uri("/resource/yes"), `HTTP/1.0`, List(`Content-Length`(17), Connection("keep-alive"),
+          `User-Agent`("curl/7.19.7 xyz")), "Shake your BOODY!", 'dontClose, GET, Uri("/"), `HTTP/1.0`, Nil, "", 'close)
       }
 
       "with multi-line headers" in {
         parse {
-          """DELETE /abc HTTP/1.1
+          """DELETE /abc HTTP/1.0
             |User-Agent: curl/7.19.7
             | abc
             |    xyz
@@ -99,12 +107,58 @@ class RequestParserSpec extends Specification {
             |Content-type: application/json
             |
             |"""
-        } === (DELETE, Uri("/abc"), `HTTP/1.1`, List(`Content-Type`(`application/json`), Connection("close", "fancy"),
-          Accept(MediaRanges.`*/*`), `User-Agent`("curl/7.19.7 abc xyz")), "", "", true)
+        } === Seq(DELETE, Uri("/abc"), `HTTP/1.0`, List(`Content-Type`(`application/json`), Connection("close", "fancy"),
+          Accept(MediaRanges.`*/*`), `User-Agent`("curl/7.19.7 abc xyz")), "", 'close)
+      }
+
+      "byte-by-byte" in {
+        val request = prep {
+          """PUT /resource/yes HTTP/1.1
+            |Content-length:    4
+            |Host: x
+            |
+            |ABCDPATCH"""
+        }
+        rawParse(newParser)(request.toCharArray.map(_.toString)(collection.breakOut): _*) ===
+          Seq(PUT, Uri("/resource/yes"), `HTTP/1.1`, List(Host("x"), `Content-Length`(4)), "ABCD", 'dontClose)
+      }
+
+      "with a custom HTTP method" in {
+        parse {
+          """BOLT / HTTP/1.0
+            |
+            |"""
+        } === Seq(BOLT, Uri("/"), `HTTP/1.0`, Nil, "", 'close)
+      }
+
+      "with Content-Length > Int.MaxSize if autochunking is enabled" in {
+        parse {
+          """PUT /resource/yes HTTP/1.1
+            |Content-length:    2147483649
+            |Host: x
+            |
+            |"""
+        } === Seq(PUT, Uri("/resource/yes"), `HTTP/1.1`, List(Host("x"), `Content-Length`(2147483649L)), 'dontClose)
+      }
+      "with several identical `Content-Type` headers" in {
+        parse {
+          """GET /data HTTP/1.1
+            |Host: x
+            |Content-Type: application/pdf
+            |Content-Type: application/pdf
+            |Content-Length: 0
+            |
+            |"""
+        } === Seq(
+          GET,
+          Uri("/data"),
+          `HTTP/1.1`,
+          List(`Content-Length`(0), `Content-Type`(`application/pdf`), Host("x")),
+          "", 'dontClose)
       }
     }
 
-    "properly parse a chunked" in {
+    "properly parse a chunked request" in {
       val start =
         """PATCH /data HTTP/1.1
           |Transfer-Encoding: chunked
@@ -113,40 +167,85 @@ class RequestParserSpec extends Specification {
           |Host: ping
           |
           |"""
+      val startMatch = Seq(PATCH, Uri("/data"), `HTTP/1.1`, List(Host("ping"),
+        `Content-Type`(`application/pdf`), Connection("lalelu"), `Transfer-Encoding`("chunked")), 'dontClose)
 
       "request start" in {
-        parse(start + "rest") === (PATCH, Uri("/data"), `HTTP/1.1`, List(Host("ping"), `Content-Type`(`application/pdf`),
-          Connection("lalelu"), `Transfer-Encoding`("chunked")), "rest", false)
+        parse(start + "rest") === startMatch ++ Seq(400: StatusCode, "Illegal character 'r' in chunk start")
       }
 
       "message chunk with and without extension" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser)("3\nabc\n") === ("abc", "", "", false)
-        parse(parser)("10;some=stuff;bla\n0123456789ABCDEF\n") === ("0123456789ABCDEF", "some=stuff;bla", "", false)
-        parse(parser)("10;foo=") === Result.NeedMoreData
-        parse(parser)("bar\n0123456789ABCDEF\nmore") === ("0123456789ABCDEF", "foo=bar", "more", false)
-        parse(parser)("10\n0123456789") === Result.NeedMoreData
-        parse(parser)("ABCDEF\neven-more") === ("0123456789ABCDEF", "", "even-more", false)
+        parse(start,
+          "3\nabc\n",
+          "10;some=stuff;bla\n0123456789ABCDEF\n",
+          "10;foo=",
+          "bar\n0123456789ABCDEF\n1" +
+            "0\n0123456789",
+          "ABCDEF\ndead") === startMatch ++
+          Seq("abc", "", 'dontClose,
+            "0123456789ABCDEF", "some=stuff;bla", 'dontClose,
+            "0123456789ABCDEF", "foo=bar", 'dontClose,
+            "0123456789ABCDEF", "", 'dontClose)
       }
 
       "message end" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser)("0\n\n") === ("", Nil, "", false)
+        parse(start, "0\n\n") === startMatch ++ Seq("", Nil, 'dontClose)
       }
 
       "message end with extension, trailer and remaining content" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser) {
+        parse(start,
           """000;nice=true
             |Foo: pip
             | apo
             |Bar: xyz
             |
-            |rest"""
-        } === ("nice=true", List(RawHeader("Bar", "xyz"), RawHeader("Foo", "pip apo")), "rest", false)
+            |GE""") === startMatch ++
+          Seq("nice=true", List(RawHeader("Bar", "xyz"), RawHeader("Foo", "pip apo")), 'dontClose)
+      }
+    }
+
+    "properly auto-chunk" in {
+      def start(contentSize: Int) =
+        f"""GET /data HTTP/1.1
+           |Content-Type: application/pdf
+           |Host: ping
+           |Content-Length: $contentSize%d
+           |
+           |"""
+      def startMatch(contentSize: Int) =
+        Seq(GET, Uri("/data"), `HTTP/1.1`, List(`Content-Length`(contentSize), Host("ping"), `Content-Type`(`application/pdf`)))
+
+      "full request if size < incoming-auto-chunking-threshold-size" in {
+        parse(start(1) + "r") === startMatch(1) ++ Seq("r", 'dontClose)
+      }
+
+      "request start" in {
+        parse(start(25) + "rest") === startMatch(25) ++ Seq('dontClose,
+          "rest", "", 'dontClose) // chunk
+      }
+
+      "request start if complete message is already available" in {
+        parse(start(25) + "rest1rest2rest3rest4rest5") ===
+          startMatch(25) ++ Seq('dontClose, // chunkstart
+            "rest1rest2rest3rest4rest5", "", 'dontClose, // chunk
+            "", Nil, 'dontClose) // chunk end
+      }
+
+      "request chunk" in {
+        parse(start(25) + "rest1", "rest2") === startMatch(25) ++ Seq('dontClose, // chunkstart
+          "rest1", "", 'dontClose, // chunk
+          "rest2", "", 'dontClose) // chunk
+      }
+
+      "request end" in {
+        parse(start(25) + "rest1", "rest2", "rest3", "rest4", "rest5GET /data HTTP") ===
+          startMatch(25) ++ Seq('dontClose, // chunkstart
+            "rest1", "", 'dontClose, // chunk
+            "rest2", "", 'dontClose, // chunk
+            "rest3", "", 'dontClose, // chunk
+            "rest4", "", 'dontClose, // chunk
+            "rest5", "", 'dontClose, // chunk
+            "", Nil, 'dontClose) // chunk end
       }
     }
 
@@ -160,46 +259,36 @@ class RequestParserSpec extends Specification {
           |"""
 
       "an illegal char after chunk size" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser)("15 ;\n") === (BadRequest, "Illegal character ' ' in chunk start")
+        parse(start, "15 ;\n").takeRight(2) === Seq(BadRequest, "Illegal character ' ' in chunk start")
       }
 
       "an illegal char in chunk size" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser)("bla") === (BadRequest, "Illegal character 'l' in chunk start")
+        parse(start, "bla").takeRight(2) === Seq(BadRequest, "Illegal character 'l' in chunk start")
       }
 
       "too-long chunk extension" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser)("3;" + ("x" * 257)) === (BadRequest, "HTTP chunk extension length exceeds configured limit of 256 characters")
+        parse(start, "3;" + ("x" * 257)).takeRight(2) ===
+          Seq(BadRequest, "HTTP chunk extension length exceeds configured limit of 256 characters")
       }
 
       "too-large chunk size" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser)("1a2b3c4d5e\n") === (BadRequest, "HTTP chunk size exceeds the configured limit of 1048576 bytes")
+        parse(start, "1a2b3c4d5e\n").takeRight(2) ===
+          Seq(BadRequest, "HTTP chunk size exceeds the configured limit of 1048576 bytes")
       }
 
       "an illegal chunk termination" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser)("3\nabcde") === (BadRequest, "Illegal chunk termination")
+        parse(start, "3\nabcde").takeRight(2) === Seq(BadRequest, "Illegal chunk termination")
       }
 
       "an illegal header in the trailer" in {
-        val parser = newParser
-        parse(parser)(start)
-        parse(parser)("0\nF@oo: pip") === (BadRequest, "Illegal character '@' in header name")
+        parse(start, "0\nF@oo: pip").takeRight(2) === Seq(BadRequest, "Illegal character '@' in header name")
       }
     }
 
     "reject a request with" in {
       "an illegal HTTP method" in {
-        parse("get") === (NotImplemented, "Unsupported HTTP method")
-        parse("GETX") === (NotImplemented, "Unsupported HTTP method")
+        parse("get ") === Seq(NotImplemented, "Unsupported HTTP method: get")
+        parse("GETX ") === Seq(NotImplemented, "Unsupported HTTP method: GETX")
       }
 
       "two Content-Length headers" in {
@@ -209,37 +298,38 @@ class RequestParserSpec extends Specification {
             |Content-Length: 3
             |
             |foo"""
-        } === (BadRequest, "HTTP message must not contain more than one Content-Length header")
+        } === Seq(BadRequest, "HTTP message must not contain more than one Content-Length header")
       }
 
       "a too-long URI" in {
         parse("GET /23456789012345678901 HTTP/1.1") ===
-          (RequestUriTooLong, "URI length exceeds the configured limit of 20 characters")
+          Seq(RequestUriTooLong, "URI length exceeds the configured limit of 20 characters")
       }
 
       "HTTP version 1.2" in {
-        parse("GET / HTTP/1.2\r\n") === (HTTPVersionNotSupported, "The server does not support the HTTP protocol version used in the request.")
+        parse("GET / HTTP/1.2\r\n") ===
+          Seq(HTTPVersionNotSupported, "The server does not support the HTTP protocol version used in the request.")
       }
 
       "with an illegal char in a header name" in {
         parse {
           """|GET / HTTP/1.1
              |User@Agent: curl/7.19.7"""
-        } === (BadRequest, "Illegal character '@' in header name")
+        } === Seq(BadRequest, "Illegal character '@' in header name")
       }
 
       "with a too-long header name" in {
         parse {
           """|GET / HTTP/1.1
              |UserxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxAgent: curl/7.19.7"""
-        } === (BadRequest, "HTTP header name exceeds the configured limit of 64 characters")
+        } === Seq(BadRequest, "HTTP header name exceeds the configured limit of 64 characters")
       }
 
       "with a too-long header-value" in {
         parse {
           """|GET / HTTP/1.1
              |Fancy: 123456789012345678901234567890123"""
-        } === (BadRequest, "HTTP header value exceeds the configured limit of 32 characters")
+        } === Seq(BadRequest, "HTTP header value exceeds the configured limit of 32 characters")
       }
 
       "with an invalid Content-Length header value" in {
@@ -248,7 +338,29 @@ class RequestParserSpec extends Specification {
              |Content-Length: 1.5
              |
              |abc"""
-        } === (BadRequest, "Illegal `Content-Length` header value")
+        } === Seq(BadRequest, "Illegal `Content-Length` header value")
+      }
+
+      "with Content-Length > Int.MaxSize if autochunking is disabled" in {
+        val request =
+          """PUT /resource/yes HTTP/1.1
+            |Content-length:    2147483649
+            |Host: x
+            |
+            |"""
+        val parser = new HttpRequestPartParser(ParserSettings(system).copy(autoChunkingThreshold = Long.MaxValue))()
+        parse(parser)(request) === Seq(400: StatusCode, "Content-Length > Int.MaxSize not supported for non-(auto)-chunked requests")
+      }
+
+      "with Content-Length > Long.MaxSize" in {
+        // content-length = (Long.MaxValue + 1) * 10, which is 0 when calculated overflow
+        parse {
+          """PUT /resource/yes HTTP/1.1
+            |Content-length: 92233720368547758080
+            |Host: x
+            |
+            |"""
+        } === Seq(400: StatusCode, "Illegal `Content-Length` header value")
       }
     }
   }
@@ -257,17 +369,31 @@ class RequestParserSpec extends Specification {
 
   def newParser = new HttpRequestPartParser(ParserSettings(system))()
 
-  def parse(rawRequest: String): AnyRef = parse(newParser)(rawRequest)
+  def parse(rawRequest: String*): Seq[Any] = parse(newParser)(rawRequest: _*)
 
-  def parse(parser: HttpRequestPartParser)(rawRequest: String): AnyRef = {
-    val data = CompactByteString(rawRequest.stripMargin.replace(EOL, "\n").replace("\n", "\r\n"))
-    parser.parse(data) match {
-      case Result.Ok(HttpRequest(m, u, h, e, p), rd, close) ⇒ (m, u, p, h, e.asString, rd.utf8String, close)
-      case Result.Ok(ChunkedRequestStart(HttpRequest(m, u, h, EmptyEntity, p)), rd, close) ⇒ (m, u, p, h, rd.utf8String, close)
-      case Result.Ok(MessageChunk(body, ext), rd, close) ⇒ (new String(body), ext, rd.utf8String, close)
-      case Result.Ok(ChunkedMessageEnd(ext, trailer), rd, close) ⇒ (ext, trailer, rd.utf8String, close)
-      case Result.ParsingError(status, info) ⇒ (status, info.formatPretty)
-      case x ⇒ x
-    }
+  def parse(parser: Parser)(rawRequest: String*): Seq[Any] = rawParse(parser)(rawRequest map prep: _*)
+
+  def rawParse(parser: Parser)(rawRequest: String*): Seq[Any] = {
+    def closeSymbol(close: Boolean) = if (close) 'close else 'dontClose
+    @tailrec def rec(current: Result, remainingData: List[ByteString], result: Seq[Any] = Seq.empty): Seq[Any] =
+      current match {
+        case Result.Emit(HttpRequest(m, u, h, e, p), c, continue) ⇒
+          rec(continue(), remainingData, result ++ Seq(m, u, p, h, e.asString, closeSymbol(c)))
+        case Result.Emit(ChunkedRequestStart(HttpRequest(m, u, h, HttpEntity.Empty, p)), c, continue) ⇒
+          rec(continue(), remainingData, result ++ Seq(m, u, p, h, closeSymbol(c)))
+        case Result.Emit(MessageChunk(d, ext), c, continue) ⇒
+          rec(continue(), remainingData, result ++ Seq(d.asString, ext, closeSymbol(c)))
+        case Result.Emit(ChunkedMessageEnd(ext, trailer), c, continue) ⇒
+          rec(continue(), remainingData, result ++ Seq(ext, trailer, closeSymbol(c)))
+        case Result.NeedMoreData(p) ⇒
+          if (remainingData.nonEmpty) rec(p(remainingData.head), remainingData.tail, result) else result
+        case Result.ParsingError(status, info) ⇒ result ++ Seq(status, info.formatPretty)
+        case x                                 ⇒ Seq(x)
+      }
+
+    val data: List[ByteString] = rawRequest.map(ByteString.apply)(collection.breakOut)
+    rec(parser(data.head), data.tail)
   }
+
+  def prep(response: String) = response.stripMargin.replace(EOL, "\n").replace("\n", "\r\n")
 }

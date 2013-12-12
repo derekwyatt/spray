@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import java.util.UUID
 import scala.util.matching.Regex
 import scala.annotation.tailrec
 import shapeless._
+import spray.routing.directives.NameReceptacle
 import spray.http.Uri.Path
 import spray.util._
 
@@ -29,6 +30,8 @@ import spray.util._
  */
 trait PathMatcher[L <: HList] extends (Path ⇒ PathMatcher.Matching[L]) { self ⇒
   import PathMatcher._
+
+  def / : PathMatcher[L] = this ~ PathMatchers.Slash
 
   def /[R <: HList](other: PathMatcher[R])(implicit prepender: Prepender[L, R]): PathMatcher[prepender.Out] =
     this ~ PathMatchers.Slash ~ other
@@ -41,7 +44,7 @@ trait PathMatcher[L <: HList] extends (Path ⇒ PathMatcher.Matching[L]) { self 
   def ~[R <: HList](other: PathMatcher[R])(implicit prepender: Prepender[L, R]): PathMatcher[prepender.Out] =
     transform(_.andThen((restL, valuesL) ⇒ other(restL).map(prepender(valuesL, _))))
 
-  def unary_!(): PathMatcher[HNil] =
+  def unary_!(): PathMatcher0 =
     new PathMatcher[HNil] {
       def apply(path: Path) = if (self(path) eq Unmatched) Matched(path, HNil) else Unmatched
     }
@@ -49,9 +52,26 @@ trait PathMatcher[L <: HList] extends (Path ⇒ PathMatcher.Matching[L]) { self 
   def transform[R <: HList](f: Matching[L] ⇒ Matching[R]): PathMatcher[R] =
     new PathMatcher[R] { def apply(path: Path) = f(self(path)) }
 
-  def map[R <: HList](f: L ⇒ R): PathMatcher[R] = transform(_.map(f))
+  def hmap[R <: HList](f: L ⇒ R): PathMatcher[R] = transform(_.map(f))
 
-  def flatMap[R <: HList](f: L ⇒ Option[R]): PathMatcher[R] = transform(_.flatMap(f))
+  def hflatMap[R <: HList](f: L ⇒ Option[R]): PathMatcher[R] = transform(_.flatMap(f))
+
+  def repeat(separator: PathMatcher0 = PathMatchers.Neutral)(implicit lift: PathMatcher.Lift[L, List]): PathMatcher[lift.Out] =
+    new PathMatcher[lift.Out] {
+      def apply(path: Path) = self(path) match {
+        case Matched(remaining, extractions) ⇒
+          def result1 = Matched(remaining, lift(extractions))
+          separator(remaining) match {
+            case Matched(remaining2, _) ⇒ this(remaining2) match {
+              case Matched(`remaining2`, _) ⇒ result1 // we made no progress, so "go back" to before the separator
+              case Matched(rest, result)    ⇒ Matched(rest, lift(extractions, result))
+              case Unmatched                ⇒ throw new IllegalStateException
+            }
+            case Unmatched ⇒ result1
+          }
+        case Unmatched ⇒ Matched(path, lift())
+      }
+    }
 }
 
 object PathMatcher extends ImplicitPathMatcherConstruction {
@@ -78,14 +98,16 @@ object PathMatcher extends ImplicitPathMatcherConstruction {
     def orElse[R <: HList](other: ⇒ Matching[R]) = other
   }
 
+  /**
+   * Creates a PathMatcher that always matches, consumes nothing and extracts the given HList of values.
+   */
   def provide[L <: HList](extractions: L): PathMatcher[L] =
     new PathMatcher[L] {
       def apply(path: Path) = Matched(path, extractions)
     }
 
   /**
-   * Creates a PathMatcher that consumes (a prefix of) the first path segment
-   * (if the path begins with a segment) and extracts the given list of extractions.
+   * Creates a PathMatcher that matches and consumes the given path prefix and extracts the given list of extractions.
    * If the given prefix is empty the returned PathMatcher matches always and consumes nothing.
    */
   def apply[L <: HList](prefix: Path, extractions: L): PathMatcher[L] =
@@ -97,6 +119,66 @@ object PathMatcher extends ImplicitPathMatcherConstruction {
     }
 
   def apply[L <: HList](magnet: PathMatcher[L]): PathMatcher[L] = magnet
+
+  implicit class PathMatcher1Ops[T](matcher: PathMatcher1[T]) {
+    def map[R](f: T ⇒ R): PathMatcher1[R] = matcher.hmap { case e :: HNil ⇒ f(e) :: HNil }
+    def flatMap[R](f: T ⇒ Option[R]): PathMatcher1[R] =
+      matcher.hflatMap { case e :: HNil ⇒ f(e).map(_ :: HNil) }
+  }
+
+  implicit class PimpedPathMatcher[L <: HList](underlying: PathMatcher[L]) {
+    def ?(implicit lift: PathMatcher.Lift[L, Option]): PathMatcher[lift.Out] =
+      new PathMatcher[lift.Out] {
+        def apply(path: Path) = underlying(path) match {
+          case Matched(rest, extractions) ⇒ Matched(rest, lift(extractions))
+          case Unmatched                  ⇒ Matched(path, lift())
+        }
+      }
+  }
+
+  sealed trait Lift[L <: HList, M[+_]] {
+    type Out <: HList
+    def apply(): Out
+    def apply(value: L): Out
+    def apply(value: L, more: Out): Out
+  }
+  object Lift {
+    trait MOps[M[+_]] {
+      def apply(): M[Nothing]
+      def apply[T](value: T): M[T]
+      def apply[T](value: T, more: M[T]): M[T]
+    }
+    object MOps {
+      implicit object OptionMOps extends MOps[Option] {
+        def apply(): Option[Nothing] = None
+        def apply[T](value: T): Option[T] = Some(value)
+        def apply[T](value: T, more: Option[T]): Option[T] = Some(value)
+      }
+      implicit object ListMOps extends MOps[List] {
+        def apply(): List[Nothing] = Nil
+        def apply[T](value: T): List[T] = value :: Nil
+        def apply[T](value: T, more: List[T]): List[T] = value :: more
+      }
+    }
+    implicit def liftHNil[M[+_]] = new Lift[HNil, M] {
+      type Out = HNil
+      def apply() = HNil
+      def apply(value: HNil) = value
+      def apply(value: HNil, more: Out) = value
+    }
+    implicit def liftSingleElement[A, M[+_]](implicit mops: MOps[M]) = new Lift[A :: HNil, M] {
+      type Out = M[A] :: HNil
+      def apply() = mops() :: HNil
+      def apply(value: A :: HNil) = mops(value.head) :: HNil
+      def apply(value: A :: HNil, more: Out) = mops(value.head, more.head) :: HNil
+    }
+    implicit def default[A, B, L <: HList, M[+_]](implicit mops: MOps[M]) = new Lift[A :: B :: L, M] {
+      type Out = M[A :: B :: L] :: HNil
+      def apply() = mops() :: HNil
+      def apply(value: A :: B :: L) = mops(value) :: HNil
+      def apply(value: A :: B :: L, more: Out) = mops(value, more.head) :: HNil
+    }
+  }
 }
 
 trait ImplicitPathMatcherConstruction {
@@ -115,6 +197,9 @@ trait ImplicitPathMatcherConstruction {
    */
   implicit def segmentStringToPathMatcher(segment: String): PathMatcher0 =
     PathMatcher(segment :: Path.Empty, HNil)
+
+  implicit def stringOptionNameReceptacle2PathMatcher(nr: NameReceptacle[Option[String]]): PathMatcher0 =
+    PathMatcher(nr.name).?
 
   /**
    * Creates a PathMatcher that consumes (a prefix of) the first path segment
@@ -173,21 +258,8 @@ trait PathMatchers {
 
   /**
    * A PathMatcher that matches a single slash character ('/').
-   * Also matches at the very end of the requests URI path if no slash is present.
    */
   object Slash extends PathMatcher0 {
-    def apply(path: Path) = path match {
-      case Path.Empty       ⇒ Matched.Empty
-      case Path.Slash(tail) ⇒ Matched(tail, HNil)
-      case _                ⇒ Unmatched
-    }
-  }
-
-  /**
-   * A PathMatcher that matches a single slash character ('/').
-   * Contrary to the `Slash` matcher it does *not* match the very end of the path if no slash is present.
-   */
-  object Slash_! extends PathMatcher0 {
     def apply(path: Path) = path match {
       case Path.Slash(tail) ⇒ Matched(tail, HNil)
       case _                ⇒ Unmatched
@@ -196,18 +268,19 @@ trait PathMatchers {
 
   /**
    * A PathMatcher that matches the very end of the requests URI path.
-   * Also matches if the only unmatched character left is a single slash.
    */
   object PathEnd extends PathMatcher0 {
     def apply(path: Path) = path match {
-      case Path.Empty | Path.SingleSlash ⇒ Matched.Empty
-      case _                             ⇒ Unmatched
+      case Path.Empty ⇒ Matched.Empty
+      case _          ⇒ Unmatched
     }
   }
 
   /**
    * A PathMatcher that matches and extracts the complete remaining,
-   * unmatched part of the requests URI path as a String.
+   * unmatched part of the request's URI path as an (encoded!) String.
+   * If you need access to the remaining unencoded elements of the path
+   * use the `RestPath` matcher!
    */
   object Rest extends PathMatcher1[String] {
     def apply(path: Path) = Matched(Path.Empty, path.toString :: HNil)
@@ -215,7 +288,7 @@ trait PathMatchers {
 
   /**
    * A PathMatcher that matches and extracts the complete remaining,
-   * unmatched part of the requests URI path.
+   * unmatched part of the request's URI path.
    */
   object RestPath extends PathMatcher1[Path] {
     def apply(path: Path) = Matched(Path.Empty, path :: HNil)
@@ -300,28 +373,26 @@ trait PathMatchers {
    * A PathMatcher that matches and extracts a Double value. The matched string representation is the pure decimal,
    * optionally signed form of a double value, i.e. without exponent.
    */
-  val DoubleNumber = PathMatcher("""[+-]?\d*\.?\d*""".r)
-    .flatMap {
-      case string :: HNil ⇒
-        try Some(java.lang.Double.parseDouble(string) :: HNil)
-        catch { case _: NumberFormatException ⇒ None }
+  val DoubleNumber: PathMatcher1[Double] =
+    PathMatcher("""[+-]?\d*\.?\d*""".r) flatMap { string ⇒
+      try Some(java.lang.Double.parseDouble(string))
+      catch { case _: NumberFormatException ⇒ None }
     }
 
   /**
    * A PathMatcher that matches and extracts a java.util.UUID instance.
    */
-  val JavaUUID = PathMatcher("""[\da-fA-F]{8}-[\da-fA-F]{4}-[\da-fA-F]{4}-[\da-fA-F]{4}-[\da-fA-F]{12}""".r)
-    .flatMap {
-      case string :: HNil ⇒
-        try Some(UUID.fromString(string) :: HNil)
-        catch { case _: IllegalArgumentException ⇒ None }
+  val JavaUUID: PathMatcher1[UUID] =
+    PathMatcher("""[\da-fA-F]{8}-[\da-fA-F]{4}-[\da-fA-F]{4}-[\da-fA-F]{4}-[\da-fA-F]{12}""".r) flatMap { string ⇒
+      try Some(UUID.fromString(string))
+      catch { case _: IllegalArgumentException ⇒ None }
     }
 
   /**
    * A PathMatcher that always matches, doesn't consume anything and extracts nothing.
    * Serves mainly as a neutral element in PathMatcher composition.
    */
-  val Neutral: PathMatcher[HNil] = PathMatcher.provide(HNil)
+  val Neutral: PathMatcher0 = PathMatcher.provide(HNil)
 
   /**
    * A PathMatcher that matches if the unmatched path starts with a path segment.
@@ -333,6 +404,13 @@ trait PathMatchers {
       case _                           ⇒ Unmatched
     }
   }
+
+  /**
+   * A PathMatcher that matches all remaining segments as a List[String].
+   * This can also be no segments resulting in the empty list.
+   * If the path has a trailing slash this slash will *not* be matched.
+   */
+  val Segments: PathMatcher1[List[String]] = Segment.repeat(separator = Slash)
 
   @deprecated("Use `Segment` instead", "1.0-M8/1.1-M8")
   def PathElement = Segment

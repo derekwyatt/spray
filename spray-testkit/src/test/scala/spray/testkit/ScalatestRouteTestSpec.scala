@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import MediaTypes._
 import HttpCharsets._
 import StatusCodes._
 import HttpHeaders._
+import akka.testkit.TestProbe
 
 class ScalatestRouteTestSpec extends FreeSpec with MustMatchers with Directives with ScalatestRouteTest {
 
@@ -55,6 +56,28 @@ class ScalatestRouteTestSpec extends FreeSpec with MustMatchers with Directives 
       } ~> check {
         rejections must be === List(MethodRejection(GET), MethodRejection(PUT))
       }
+    }
+
+    "separate running route from checking" in {
+      val pinkHeader = RawHeader("Fancy", "pink")
+
+      case class HandleRequest(ctx: RequestContext)
+      val service = TestProbe()
+      val handler = TestProbe()
+
+      val result =
+        Get() ~> addHeader(pinkHeader) ~> {
+          respondWithHeader(pinkHeader) { ctx ⇒ service.send(handler.ref, HandleRequest(ctx)) }
+        } ~> runRoute
+
+      val ctx = handler.expectMsgType[HandleRequest].ctx
+      ctx.complete("abc")
+
+      check {
+        status must be === OK
+        body must be === HttpEntity(ContentType(`text/plain`, `UTF-8`), "abc")
+        header("Fancy") must be === Some(pinkHeader)
+      }(result)
     }
   }
 

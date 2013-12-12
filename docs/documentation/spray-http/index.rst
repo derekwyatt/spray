@@ -64,7 +64,7 @@ In order to develop a better understanding for how *spray* models HTTP you proba
 around the `spray-http sources`_ (ideally with an IDE that supports proper code navigation).
 
 .. _here: `spray-http sources`_
-.. _spray-http sources: https://github.com/spray/spray/tree/release/1.1/spray-http/src/main/scala/spray/http
+.. _spray-http sources: https://github.com/spray/spray/tree/release/1.2/spray-http/src/main/scala/spray/http
 
 
 Content-Type Header
@@ -72,7 +72,7 @@ Content-Type Header
 
 One thing worth highlighting is the special treatment of the HTTP ``Content-Type`` header. Since the binary content of
 HTTP message entities can only be properly interpreted when the corresponding content-type is known *spray-http* puts
-the content-type value very close to the entity data. The ``HttpBody`` type (the non-empty variant of the
+the content-type value very close to the entity data. The ``HttpEntity.NonEmpty`` type (the non-empty variant of the
 ``HttpEntity``) is essentially little more than a tuple of the ``ContentType`` and the entity's bytes.
 All logic in *spray* that needs to access the content-type of an HTTP message always works with the ``ContentType``
 value in the ``HttpEntity``. Potentially existing instances of the ``Content-Type`` header in the ``HttpMessage``'s
@@ -93,4 +93,4 @@ incoming responses by :ref:`spray-client`. File extension resolution (as used fo
 :ref:`FileAndResourceDirectives`) will work as expected.
 
 .. _IANA MIME media type registry: http://www.iana.org/assignments/media-types/index.html
-.. _MediaTypes: https://github.com/spray/spray/blob/master/spray-http/src/main/scala/spray/http/MediaType.scala
+.. _MediaTypes: https://github.com/spray/spray/blob/release/1.2/spray-http/src/main/scala/spray/http/MediaType.scala

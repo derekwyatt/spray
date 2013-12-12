@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 package spray.httpx.encoding
 
+import spray.http.{ HttpRequest, HttpEntity }
 import java.io.ByteArrayOutputStream
 import java.util.zip.{ InflaterOutputStream, DeflaterOutputStream }
 import org.specs2.mutable.Specification
@@ -40,6 +41,10 @@ class DeflateSpec extends Specification with CodecSpecSupport {
     }
     "properly roundtip encode/decode a large string" in {
       ourInflate(ourDeflate(largeTextBytes)) must readAs(largeText)
+    }
+    "properly roundtip encode/decode an HttpRequest" in {
+      val request = HttpRequest(entity = HttpEntity(largeText))
+      Deflate.decode(Deflate.encode(request)) === request
     }
     "provide a better compression ratio than the standard Deflater/Inflater streams" in {
       ourDeflate(largeTextBytes).length must be_<(streamDeflate(largeTextBytes).length)

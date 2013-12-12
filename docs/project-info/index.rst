@@ -6,10 +6,3 @@ Project Info
 
    current-versions
    maven-repository
-   contributing
-   changelog
-   credits
-   references
-   sponsors
-   license
-   other-projects

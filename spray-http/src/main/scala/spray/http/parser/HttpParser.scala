@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ object HttpParser extends Parser with ProtocolParameterRules with AdditionalRule
     with ContentTypeHeader
     with CookieHeaders
     with SimpleHeaders
-    with WwwAuthenticateHeader {
+    with CORSHeaders {
 
   // all string literals automatically receive a trailing optional whitespace
   override implicit def toRule(string: String): Rule0 =
@@ -71,16 +71,15 @@ object HttpParser extends Parser with ProtocolParameterRules with AdditionalRule
     }
   }
 
-  def parseHeaders(headers: List[HttpHeader]): (List[ErrorInfo], List[HttpHeader]) = {
-    @tailrec def parse(headers: List[HttpHeader], errors: List[ErrorInfo] = Nil,
-                       parsed: List[HttpHeader] = Nil): (List[ErrorInfo], List[HttpHeader]) =
-      if (!headers.isEmpty) parseHeader(headers.head) match {
-        case Right(h)    ⇒ parse(headers.tail, errors, h :: parsed)
-        case Left(error) ⇒ parse(headers.tail, error :: errors, parsed)
+  @tailrec def parseHeaders(headers: List[HttpHeader], errors: List[ErrorInfo] = Nil,
+                            result: List[HttpHeader] = Nil): (List[ErrorInfo], List[HttpHeader]) =
+    headers match {
+      case Nil ⇒ errors -> result
+      case head :: tail ⇒ parseHeader(head) match {
+        case Right(h)    ⇒ parseHeaders(tail, errors, h :: result)
+        case Left(error) ⇒ parseHeaders(tail, error :: errors, head :: result)
       }
-      else errors -> parsed
-    parse(headers)
-  }
+    }
 
   def parse[A](rule: Rule1[A], input: String): Either[ErrorInfo, A] = {
     try {

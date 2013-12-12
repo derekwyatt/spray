@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package parser
 
 import org.parboiled.scala._
 import org.parboiled.errors.ParsingException
+import spray.util.identityFunc
 
 // direct implementation of http://www.w3.org/Protocols/rfc2616/rfc2616-sec3.html
 private[parser] trait ProtocolParameterRules {
@@ -129,10 +130,10 @@ private[parser] trait ProtocolParameterRules {
 
   /* 3.9 Quality Values */
 
-  def QValue = rule(
-    // more loose than the spec which only allows 1 to max. 3 digits/zeros
-    ch('0') ~ optional(ch('.') ~ zeroOrMore(Digit)) ~ OptWS
-      | ch('1') ~ optional(ch('.') ~ zeroOrMore(ch('0'))) ~ OptWS)
+  def QValue = rule( // a bit more loose than the spec
+    (ch('0') ~ optional(ch('.') ~ zeroOrMore(Digit))
+      | ch('.') ~ oneOrMore(Digit)
+      | ch('1') ~ optional(ch('.') ~ zeroOrMore(ch('0')))) ~> (_.toFloat) ~ OptWS)
 
   /* 3.10 Language Tags */
 

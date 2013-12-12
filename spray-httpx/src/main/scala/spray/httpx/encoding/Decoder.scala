@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,8 +21,13 @@ import spray.http._
 trait Decoder {
   def encoding: HttpEncoding
 
-  def decode[T <: HttpMessage](message: T): T#Self = message.mapEntity {
-    _.flatMap { case HttpBody(contentType, buffer) ⇒ HttpEntity(contentType, newDecompressor.decompress(buffer)) }
+  def decode[T <: HttpMessage](message: T): T#Self = message.entity match {
+    case HttpEntity.NonEmpty(contentType, data) if message.headers exists Encoder.isContentEncodingHeader ⇒
+      message.withHeadersAndEntity(
+        headers = message.headers filterNot Encoder.isContentEncodingHeader,
+        entity = HttpEntity(contentType, newDecompressor.decompress(data.toByteArray)))
+
+    case _ ⇒ message.message
   }
 
   def newDecompressor: Decompressor

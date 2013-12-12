@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -126,7 +126,7 @@ object DateTime {
    * Creates a new `DateTime` with the given properties.
    */
   def apply(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 0, second: Int = 0): DateTime = {
-    require(1800 <= year && year <= 2199, "year must be >= 1800 and <= 2199")
+    require(1800 <= year && year <= 9999, "year must be >= 1800 and <= 9999")
     require(1 <= month && month <= 12, "month must be >= 1 and <= 12")
     require(1 <= day && day <= 31, "day must be >= 1 and <= 31")
     require(0 <= hour && hour <= 23, "hour must be >= 0 and <= 23")

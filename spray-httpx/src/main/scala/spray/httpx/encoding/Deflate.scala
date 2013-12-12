@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -83,18 +83,18 @@ class DeflateDecompressor extends Decompressor {
 
   protected def decompress(buffer: Array[Byte], offset: Int) = {
     @tailrec
-    def doDecompress(off: Int): Unit = {
-      inflater.setInput(buffer, off, math.min(1024, buffer.length - off))
+    def doDecompress(off: Int): Int = {
+      val length = math.min(1024, buffer.length - off)
+      inflater.setInput(buffer, off, length)
       drain()
       if (inflater.needsDictionary) throw new ZipException("ZLIB dictionary missing")
       val nextOffset = off + 1024
       if (nextOffset < buffer.length && !inflater.finished()) doDecompress(nextOffset)
+      else off + length - inflater.getRemaining
     }
     try {
-      if (buffer.length > 0) {
-        doDecompress(offset)
-        buffer.length - inflater.getRemaining
-      } else 0
+      if (buffer.length > 0) doDecompress(offset)
+      else 0
     } catch {
       case e: DataFormatException ⇒
         throw new ZipException(e.getMessage.toOption getOrElse "Invalid ZLIB data format")

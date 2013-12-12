@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,12 @@
 
 package spray.httpx.marshalling
 
+import scala.xml.NodeSeq
 import org.specs2.mutable.Specification
 import akka.actor.ActorSystem
 import spray.http._
+import MediaTypes._
+import HttpCharsets._
 
 class MetaMarshallersSpec extends Specification {
   implicit val system = ActorSystem()
@@ -35,10 +38,28 @@ class MetaMarshallersSpec extends Specification {
   "The streamMarshaller" should {
     "properly marshal a Stream instance" in {
       val stream = "abc" #:: "def" #:: "ghi" #:: "jkl" #:: Stream.empty
-      val ctx = marshalCollecting(stream)
+      val ctx = new CollectingMarshallingContext
+      marshalCollecting(stream, ctx)
       ctx.entity === Some(HttpEntity("abc"))
-      ctx.chunks.map(_.bodyAsString) === Seq("def", "ghi", "jkl")
+      ctx.chunks.map(_.data.asString) === Seq("def", "ghi", "jkl")
       ctx.chunkedMessageEnd === Some(ChunkedMessageEnd)
+    }
+  }
+
+  "MMarshallers" should {
+    "allow provision of Marshaller[M[T]] given a MarshallerM[M]" in {
+      class CakeLayer[M[_]](implicit marshallerM: MarshallerM[M]) {
+        def apply(value: Either[M[NodeSeq], M[String]]): HttpEntity =
+          value match {
+            case Left(mn)  ⇒ marshalUnsafe(mn) // requires a Marshaller[M[NodeSeq]]
+            case Right(ms) ⇒ marshalUnsafe(ms) // requires a Marshaller[M[String]]
+          }
+      }
+      val optionCakeLayer = new CakeLayer[Option]
+      optionCakeLayer(Right(Some("foo"))) === HttpEntity("foo")
+      optionCakeLayer(Right(None)) === HttpEntity.Empty
+      optionCakeLayer(Left(Some(<i>42</i>))) === HttpEntity(ContentType(`text/xml`, `UTF-8`), "<i>42</i>")
+      optionCakeLayer(Left(None)) === HttpEntity.Empty
     }
   }
 

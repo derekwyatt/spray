@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,11 +27,11 @@ object FormFieldExtractor {
   def apply(form: HttpForm): FormFieldExtractor = form match {
     case FormData(fields) ⇒ new FormFieldExtractor {
       type Field = UrlEncodedFormField
-      def field(name: String) = new UrlEncodedFormField(name, fields.get(name))
+      def field(name: String) = new UrlEncodedFormField(name, fields.find(_._1 == name).map(_._2))
     }
-    case MultipartFormData(fields) ⇒ new FormFieldExtractor {
+    case multiPartData: MultipartFormData ⇒ new FormFieldExtractor {
       type Field = MultipartFormField
-      def field(name: String) = new MultipartFormField(name, fields.get(name))
+      def field(name: String) = new MultipartFormField(name, multiPartData.get(name))
     }
   }
 }
@@ -51,23 +51,45 @@ class UrlEncodedFormField(val name: String, val rawValue: Option[String]) extend
   type Raw = String
   def as[T](implicit ffc: FormFieldConverter[T]) = ffc.urlEncodedFieldConverter match {
     case Some(conv) ⇒ conv(rawValue)
-    case None       ⇒ fail(name, "multipart/form-data")
+    case None ⇒
+      ffc.multipartFieldConverter match {
+        case Some(conv) ⇒
+          conv(rawValue.map(value ⇒ BodyPart(HttpEntity(value)))) match {
+            case Left(UnsupportedContentType(msg)) ⇒
+              Left(UnsupportedContentType(msg + " but tried to read from application/x-www-form-urlencoded encoded field '" +
+                name + "' which provides only text/plain values."))
+            case x ⇒ x
+          }
+        case None ⇒ fail(name, "multipart/form-data")
+      }
   }
 }
 
 class MultipartFormField(val name: String, val rawValue: Option[BodyPart]) extends FormField {
   type Raw = BodyPart
   def as[T](implicit ffc: FormFieldConverter[T]) = ffc.multipartFieldConverter match {
-    case Some(conv) ⇒ conv(rawValue.map(_.entity))
-    case None       ⇒ fail(name, "application/x-www-form-urlencoded")
+    case Some(conv) ⇒ conv(rawValue)
+    case None ⇒
+      ffc.urlEncodedFieldConverter match {
+        case Some(conv) ⇒
+          rawValue match {
+            case Some(BodyPart(HttpEntity.NonEmpty(ContentType(tpe, _), data), _)) if MediaRange(tpe).matches(MediaTypes.`text/plain`) ⇒
+              conv(Some(data.asString))
+            case None | Some(BodyPart(HttpEntity.Empty, _)) ⇒ conv(None)
+            case Some(BodyPart(HttpEntity.NonEmpty(tpe, _), _)) ⇒
+              Left(UnsupportedContentType(s"Field '$name' can only be read from " +
+                s"'application/x-www-form-urlencoded' form content but was '${tpe.mediaType}'"))
+          }
+        case None ⇒ fail(name, "application/x-www-form-urlencoded")
+      }
   }
 }
 
-import spray.httpx.unmarshalling.{ FromStringOptionDeserializer ⇒ FSOD, FromEntityOptionUnmarshaller ⇒ FEOU }
+import spray.httpx.unmarshalling.{ FromStringOptionDeserializer ⇒ FSOD, FromBodyPartOptionUnmarshaller ⇒ FBPOU }
 
 sealed abstract class FormFieldConverter[T] { self ⇒
   def urlEncodedFieldConverter: Option[FSOD[T]]
-  def multipartFieldConverter: Option[FEOU[T]]
+  def multipartFieldConverter: Option[FBPOU[T]]
   def withDefault(default: T): FormFieldConverter[T] =
     new FormFieldConverter[T] {
       lazy val urlEncodedFieldConverter = self.urlEncodedFieldConverter.map(_.withDefaultValue(default))
@@ -76,11 +98,11 @@ sealed abstract class FormFieldConverter[T] { self ⇒
 }
 
 object FormFieldConverter extends FfcLowerPrioImplicits {
-  implicit def dualModeFormFieldConverter[T: FSOD: FEOU] = new FormFieldConverter[T] {
+  implicit def dualModeFormFieldConverter[T: FSOD: FBPOU] = new FormFieldConverter[T] {
     lazy val urlEncodedFieldConverter = Some(implicitly[FSOD[T]])
-    lazy val multipartFieldConverter = Some(implicitly[FEOU[T]])
+    lazy val multipartFieldConverter = Some(implicitly[FBPOU[T]])
   }
-  def fromFSOD[T](fsod: FSOD[T])(implicit feou: FEOU[T] = null) =
+  def fromFSOD[T](fsod: FSOD[T])(implicit feou: FBPOU[T] = null) =
     if (feou == null) urlEncodedFormFieldConverter(fsod) else dualModeFormFieldConverter(fsod, feou)
 }
 
@@ -90,9 +112,9 @@ private[unmarshalling] abstract class FfcLowerPrioImplicits extends FfcLowerPrio
     def multipartFieldConverter = None
   }
 
-  implicit def multiPartFormFieldConverter[T: FEOU] = new FormFieldConverter[T] {
+  implicit def multiPartFormFieldConverter[T: FBPOU] = new FormFieldConverter[T] {
     def urlEncodedFieldConverter = None
-    lazy val multipartFieldConverter = Some(implicitly[FEOU[T]])
+    lazy val multipartFieldConverter = Some(implicitly[FBPOU[T]])
   }
 }
 

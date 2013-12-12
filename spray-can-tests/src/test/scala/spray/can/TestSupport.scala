@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,8 +24,9 @@ import HttpHeaders._
 import MediaTypes._
 
 object TestSupport {
+  val ServerOnTheMove = StatusCodes.registerCustom(330, "Server on the move")
 
-  def defaultParserSettings = ParserSettings(ConfigFactory.load() getConfig "spray.can.parsing")
+  def defaultParserSettings = ParserSettings(ConfigFactory.load())
 
   def emptyRawRequest(method: String = "GET") = prep {
     """|%s / HTTP/1.1
@@ -39,7 +40,7 @@ object TestSupport {
     """|%s / HTTP/1.1
        |Host: example.com:8080
        |User-Agent: spray/1.0
-       |Content-Type: text/plain
+       |Content-Type: text/plain; charset=UTF-8
        |Content-Length: %s
        |
        |%s"""
@@ -55,7 +56,7 @@ object TestSupport {
   def response(content: String, additionalHeaders: HttpHeader*) = HttpResponse(
     status = 200,
     headers = additionalHeaders.toList ::: List(
-      `Content-Type`(`text/plain`),
+      `Content-Type`(ContentTypes.`text/plain(UTF-8)`),
       `Content-Length`(content.length),
       `Date`(DateTime(2011, 8, 25, 9, 10, 29)),
       `Server`("spray/1.0")),
@@ -75,7 +76,7 @@ object TestSupport {
        |Server: spray/1.0
        |Date: Thu, 25 Aug 2011 09:10:29 GMT
        |Content-Length: %s
-       |Content-Type: text/plain
+       |Content-Type: text/plain; charset=UTF-8
        |%s
        |%s""".format(content.length, if (additionalHeaders.isEmpty) "" else additionalHeaders + '\n', content)
   }
@@ -83,7 +84,7 @@ object TestSupport {
   val chunkedRequestStart = prep {
     """GET / HTTP/1.1
       |Host: test.com
-      |Content-Type: text/plain
+      |Content-Type: text/plain; charset=UTF-8
       |Transfer-Encoding: chunked
       |
       |"""
@@ -94,7 +95,7 @@ object TestSupport {
       |Transfer-Encoding: chunked
       |Server: spray/1.0
       |Date: Thu, 25 Aug 2011 09:10:29 GMT
-      |Content-Type: text/plain
+      |Content-Type: text/plain; charset=UTF-8
       |
       |"""
   }

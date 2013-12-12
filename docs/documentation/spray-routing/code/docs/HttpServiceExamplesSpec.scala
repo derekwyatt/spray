@@ -38,7 +38,7 @@ class HttpServiceExamplesSpec extends Specification with Specs2RouteTest {
     case class Update(order: Order)
     case class OrderItem(i: Int, os: Option[String], s: String)
     def getOrdersFromDB = ""
-    def processOrderRequest(id: Int, f: Order => Unit): Unit = {}
+    def processOrderRequest(id: Int, f: Order => Unit) {}
     def myDbActor: ActorRef = null
     implicit val umOrder: Unmarshaller[Order] = null
     implicit val mOrder: Marshaller[Order] = null
@@ -70,11 +70,12 @@ class HttpServiceExamplesSpec extends Specification with Specs2RouteTest {
             }
           } ~
           post {
-            (decodeRequest(Gzip) | decodeRequest(NoEncoding)) {
+            // decompresses the request with Gzip or Deflate when required
+            decompressRequest() {
               // unmarshal with in-scope unmarshaller
               entity(as[Order]) { order =>
                 // transfer to newly spawned actor
-                detachTo(singleRequestServiceActor) {
+                detach() {
                   complete {
                     // ... write order to DB
                     "Order received"
@@ -87,7 +88,7 @@ class HttpServiceExamplesSpec extends Specification with Specs2RouteTest {
       } ~
       // extract URI path element as Int
       pathPrefix("order" / IntNumber) { orderId =>
-        path("") {
+        pathEnd {
           // method tunneling via query param
           (put | parameter('method ! "put")) {
             // form extraction from multipart or www-url-encoded forms
@@ -102,8 +103,8 @@ class HttpServiceExamplesSpec extends Specification with Specs2RouteTest {
             // JSONP support
             jsonpWithParameter("callback") {
               // use in-scope marshaller to create completer function
-              produce(instanceOf[Order]) { complete => ctx =>
-                processOrderRequest(orderId, complete)
+              produce(instanceOf[Order]) { completer => ctx =>
+                processOrderRequest(orderId, completer)
               }
             }
           }
@@ -123,14 +124,16 @@ class HttpServiceExamplesSpec extends Specification with Specs2RouteTest {
       path("documentation") {
         // cache responses to GET requests
         cache(simpleCache) {
-          // serve up static content from a JAR resource
-          encodeResponse(Gzip) {
+          // optionally compresses the response with Gzip or Deflate
+          // if the client accepts compressed responses
+          compressResponse() {
+            // serve up static content from a JAR resource
             getFromResourceDirectory("docs")
           }
         }
       } ~
-      path("oldApi" / Rest) { path =>
-        redirect("http://oldapi.example.com/" + path, StatusCodes.MovedPermanently)
+      path("oldApi" / Rest) { pathRest =>
+        redirect("http://oldapi.example.com/" + pathRest, StatusCodes.MovedPermanently)
       }
     }
   }

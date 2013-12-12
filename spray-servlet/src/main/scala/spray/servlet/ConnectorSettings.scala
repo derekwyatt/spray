@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,8 @@
 
 package spray.servlet
 
-import com.typesafe.config.{ ConfigFactory, Config }
+import com.typesafe.config.Config
 import scala.concurrent.duration.Duration
-import akka.actor.ActorSystem
 import spray.http.Uri
 import spray.util._
 
@@ -30,31 +29,31 @@ case class ConnectorSettings(
     rootPath: Uri.Path,
     remoteAddressHeader: Boolean,
     verboseErrorMessages: Boolean,
-    maxContentLength: Long) {
+    maxContentLength: Long,
+    servletRequestAccess: Boolean,
+    illegalHeaderWarnings: Boolean,
+    uriParsingMode: Uri.ParsingMode) {
 
   require(!bootClass.isEmpty,
     "No boot class configured. Please specify a boot class FQN in the spray.servlet.boot-class config setting.")
-  requirePositiveOrUndefined(requestTimeout)
-  requirePositiveOrUndefined(timeoutTimeout)
+  requirePositive(requestTimeout)
+  requirePositive(timeoutTimeout)
   require(maxContentLength > 0, "max-content-length must be > 0")
 
   val rootPathCharCount = rootPath.charCount
 }
 
-object ConnectorSettings {
-  def apply(system: ActorSystem): ConnectorSettings =
-    apply(system.settings.config getConfig "spray.servlet")
-
-  def apply(config: Config): ConnectorSettings = {
-    val c = config withFallback ConfigFactory.defaultReference(getClass.getClassLoader)
-    ConnectorSettings(
-      c getString "boot-class",
-      c getDuration "request-timeout",
-      c getDuration "timeout-timeout",
-      c getString "timeout-handler",
-      Uri.Path(c getString "root-path"),
-      c getBoolean "remote-address-header",
-      c getBoolean "verbose-error-messages",
-      c getBytes "max-content-length")
-  }
+object ConnectorSettings extends SettingsCompanion[ConnectorSettings]("spray.servlet") {
+  def fromSubConfig(c: Config) = apply(
+    c getString "boot-class",
+    c getDuration "request-timeout",
+    c getDuration "timeout-timeout",
+    c getString "timeout-handler",
+    Uri.Path(c getString "root-path"),
+    c getBoolean "remote-address-header",
+    c getBoolean "verbose-error-messages",
+    c getBytes "max-content-length",
+    c getBoolean "servlet-request-access",
+    c getBoolean "illegal-header-warnings",
+    Uri.ParsingMode(c getString "uri-parsing-mode"))
 }

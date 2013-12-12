@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,27 @@
 
 package spray.can.client
 
-import java.net.InetSocketAddress
 import scala.collection.immutable
 import scala.collection.immutable.Queue
 import scala.concurrent.duration.Duration
 import akka.actor._
 import akka.io.Inet
-import spray.util.SprayActorLogging
 import spray.can.client.HttpHostConnector._
 import spray.can.Http
 import spray.io.ClientSSLEngineProvider
 import spray.http._
+import HttpMethods._
+import spray.util.SimpleStash
+import HttpHeaders.Location
+import akka.io.IO
 
-private[client] class HttpHostConnectionSlot(remoteAddress: InetSocketAddress,
-                                             options: immutable.Traversable[Inet.SocketOption],
-                                             idleTimeout: Duration,
-                                             clientConnectionSettingsGroup: ActorRef)(implicit sslEngineProvider: ClientSSLEngineProvider)
-    extends Actor with SprayActorLogging {
+private class HttpHostConnectionSlot(host: String, port: Int,
+                                     sslEncryption: Boolean,
+                                     options: immutable.Traversable[Inet.SocketOption],
+                                     idleTimeout: Duration,
+                                     clientConnectionSettingsGroup: ActorRef)(implicit sslEngineProvider: ClientSSLEngineProvider)
+    extends Actor with SimpleStash with ActorLogging {
+  import HttpHostConnectionSlot._
 
   // we cannot sensibly recover from crashes
   override def supervisorStrategy = SupervisorStrategy.stoppingStrategy
@@ -44,8 +48,8 @@ private[client] class HttpHostConnectionSlot(remoteAddress: InetSocketAddress,
 
     {
       case ctx: RequestContext ⇒
-        log.debug("Attempting new connection to {}", remoteAddress)
-        clientConnectionSettingsGroup ! Http.Connect(remoteAddress, None, options, None)
+        log.debug("Attempting new connection to {}:{}", host, port)
+        clientConnectionSettingsGroup ! Http.Connect(host, port, sslEncryption, None, options, None)
         context.setReceiveTimeout(Duration.Undefined)
         context.become(connecting(Queue(ctx)))
 
@@ -59,20 +63,18 @@ private[client] class HttpHostConnectionSlot(remoteAddress: InetSocketAddress,
           case _: Http.CloseCommand ⇒ context.stop(self)
         }
 
-      case Terminated(conn) ⇒
-      // ignore, may happen if in closing we unwatch too late
-      // and this message is already in the mailbox
+      case _: Timedout ⇒ // we can drop this here, as we are already back in the unconnected state
     }
   }
 
   def connecting(openRequests: Queue[RequestContext], aborted: Option[Http.CloseCommand] = None): Receive = {
     case _: Http.Connected if aborted.isDefined ⇒
       sender ! aborted.get
-      openRequests foreach clear("Connection actively closed", retry = false)
+      openRequests foreach clear("Connection actively closed", retry = RetryNever)
       context.become(terminating(context.watch(sender)))
 
     case _: Http.Connected ⇒
-      log.debug("Connection to {} established, dispatching {} pending requests", remoteAddress, openRequests.size)
+      log.debug("Connection to {}:{} established, dispatching {} pending requests", host, port, openRequests.size)
       openRequests foreach dispatchToServer(sender)
       context.become(connected(context.watch(sender), openRequests))
 
@@ -82,30 +84,47 @@ private[client] class HttpHostConnectionSlot(remoteAddress: InetSocketAddress,
 
     case _: Http.CommandFailed ⇒
       log.debug("Connection attempt failed")
-      openRequests foreach clear("Connection attempt failed", retry = false)
+      val error = new Http.ConnectionAttemptFailedException(host, port)
+      openRequests foreach clear(error, retry = RetryAlways)
       if (aborted.isEmpty) {
         context.parent ! Disconnected(openRequests.size)
         context.become(unconnected)
       } else context.stop(self)
+
+    case _: Timedout ⇒ // drop, we'll see a CommandFailed next
   }
 
   def connected(httpConnection: ActorRef, openRequests: Queue[RequestContext],
                 closeAfterResponseEnd: Boolean = false): Receive = {
     case part: HttpResponsePart if openRequests.nonEmpty ⇒
-      val RequestContext(request, _, commander) = openRequests.head
-      if (log.isDebugEnabled) log.debug("Delivering {} for {}", formatResponse(part), format(request))
-      commander ! part
-      def handleResponseCompletion(): Unit = {
+      def handleResponseCompletion(closeAfterResponseEnd: Boolean): Unit = {
         context.parent ! RequestCompleted
-        context.become(connected(httpConnection, openRequests.tail))
+        context.become {
+          if (closeAfterResponseEnd)
+            closing(httpConnection, openRequests.tail,
+              "Connection was closed by the peer through `Connection: close`", retry = RetryIdempotent)
+          else connected(httpConnection, openRequests.tail)
+        }
       }
+
+      val ctx = openRequests.head
+
       part match {
-        case x: HttpResponse ⇒ handleResponseCompletion()
+        case x: HttpResponse ⇒ handleResponseCompletion(x.connectionCloseExpected)
         case ChunkedResponseStart(x: HttpResponse) ⇒
           context.become(connected(httpConnection, openRequests, x.connectionCloseExpected))
         case _: MessageChunk      ⇒ // nothing to do
-        case _: ChunkedMessageEnd ⇒ handleResponseCompletion()
+        case _: ChunkedMessageEnd ⇒ handleResponseCompletion(closeAfterResponseEnd)
       }
+
+      val maybeRedirect =
+        for {
+          response ← responseIfComplete(part) if ctx.redirectsLeft > 0
+          method ← redirectMethod(ctx.request, response)
+          location ← response.header[Location]
+        } yield () ⇒ redirect(location, method, ctx)
+
+      maybeRedirect.getOrElse(() ⇒ dispatchToCommander(ctx, part)).apply()
 
     case x: HttpResponsePart ⇒
       log.warning("Received unexpected response for non-existing request: {}, dropping", x)
@@ -117,61 +136,111 @@ private[client] class HttpHostConnectionSlot(remoteAddress: InetSocketAddress,
     case ev @ Http.SendFailed(part) ⇒
       log.debug("Sending {} failed, closing connection", format(part))
       httpConnection ! Http.Close
-      context.become(closing(httpConnection, openRequests, "Error sending request (part)", retry = true))
+      context.become(closing(httpConnection, openRequests, "Error sending request (part)", retry = RetryIdempotent))
 
     case ev: Http.CommandFailed ⇒
       log.debug("Received {}, closing connection", ev)
       httpConnection ! Http.Close
-      context.become(closing(httpConnection, openRequests, "Command error", retry = true))
+      context.become(closing(httpConnection, openRequests, "Command error", retry = RetryIdempotent))
 
     case ev @ Timedout(part) ⇒
       log.debug("{} timed out, closing connection", format(part))
-      context.become(closing(httpConnection, openRequests, "Request timeout", retry = true))
+      context.become(closing(httpConnection, openRequests, new Http.RequestTimeoutException(part, format(part) + " timed out"), retry = RetryIdempotent))
 
     case cmd: Http.CloseCommand ⇒
       httpConnection ! cmd
-      openRequests foreach clear(s"Connection actively closed ($cmd)", retry = false)
+      openRequests foreach clear(s"Connection actively closed ($cmd)", retry = RetryNever)
       context.become(terminating(httpConnection))
 
     case ev: Http.ConnectionClosed ⇒
-      context.parent ! Disconnected(openRequests.size)
+
       val errorMsgForOpenRequests = ev match {
         case Http.PeerClosed ⇒ "Premature connection close (the server doesn't appear to support request pipelining)"
         case x               ⇒ x.toString
       }
-      openRequests foreach clear(errorMsgForOpenRequests, retry = true)
-      context.unwatch(httpConnection)
-      context.become(unconnected)
+      reportDisconnection(openRequests, errorMsgForOpenRequests, retry = RetryIdempotent)
+      context.become(waitingForConnectionTermination(httpConnection))
 
     case Terminated(`httpConnection`) ⇒
-      context.parent ! Disconnected(openRequests.size)
-      openRequests foreach clear("Unexpected connection termination", retry = true)
+      reportDisconnection(openRequests, "Unexpected connection termination", retry = RetryIdempotent)
       context.become(unconnected)
   }
 
-  def closing(httpConnection: ActorRef, openRequests: Queue[RequestContext], errorMsg: String,
-              retry: Boolean): Receive = {
+  def redirectMethod(req: HttpRequest, res: HttpResponse) = (req.method, res.status.intValue) match {
+    case (GET | HEAD, 301 | 302 | 303) ⇒ Some(req.method)
+    case (_, 302 | 303) ⇒
+      // 302 is treated in accordance with the notes in RFC 2616 and
+      // https://tools.ietf.org/html/draft-ietf-httpbis-p2-semantics-25#section-6.4.3
+      //   "Note: For historic reasons, a user agent MAY change the request method from
+      //          POST to GET for the subsequent request."
+      Some(GET)
+    case (_, 307 | 308) ⇒
+      // in RFC 2616 forbidden for other requests than GET | HEAD
+      // in the latest httpbis draft, not explicitly disallowed any more
+      // https://tools.ietf.org/html/draft-ietf-httpbis-p2-semantics-25#section-6.4.7
+      // We choose the more relaxed httpbis condition for now.
+      Some(req.method)
+    case _ ⇒ None //request should not be followed
+  }
+  def responseIfComplete(res: HttpResponsePart): Option[HttpResponse] =
+    res match {
+      case r: HttpResponse ⇒ Some(r)
+      case _               ⇒ None
+    }
 
-    case ev @ (_: Http.ConnectionClosed | Terminated(`httpConnection`)) ⇒
-      context.parent ! Disconnected(openRequests.size)
-      openRequests foreach clear(errorMsg, retry)
-      context.unwatch(httpConnection)
+  def redirect(location: Location, method: HttpMethod, ctx: RequestContext) {
+    val baseUri = ctx.request.uri.toEffectiveHttpRequestUri(Uri.Host(host), port, sslEncryption)
+    val redirectUri = location.uri.resolvedAgainst(baseUri)
+    val request = HttpRequest(method, redirectUri)
+
+    if (log.isDebugEnabled) log.debug("Redirecting to {}", redirectUri.toString)
+    IO(Http)(context.system) ! ctx.copy(request = request, redirectsLeft = ctx.redirectsLeft - 1)
+  }
+
+  def closing(httpConnection: ActorRef, openRequests: Queue[RequestContext], error: String, retry: RetryMode): Receive =
+    closing(httpConnection, openRequests, new Http.ConnectionException(error), retry)
+
+  def closing(httpConnection: ActorRef, openRequests: Queue[RequestContext], error: Http.ConnectionException,
+              retry: RetryMode): Receive = {
+    case _: Http.ConnectionClosed ⇒
+      reportDisconnection(openRequests, error, retry)
+      context.become(waitingForConnectionTermination(httpConnection))
+
+    case Terminated(`httpConnection`) ⇒
+      reportDisconnection(openRequests, error, retry)
+      unstashAll()
       context.become(unconnected)
+
+    case x ⇒ stash(x)
+  }
+  def waitingForConnectionTermination(httpConnection: ActorRef): Receive = {
+    case Terminated(`httpConnection`) ⇒
+      unstashAll()
+      context.become(unconnected)
+    case x ⇒ stash(x)
   }
 
   def terminating(httpConnection: ActorRef): Receive = {
     case _: Http.ConnectionClosed     ⇒ // ignore
     case Terminated(`httpConnection`) ⇒ context.stop(self)
   }
+  def reportDisconnection(openRequests: Queue[RequestContext], error: String, retry: RetryMode): Unit =
+    reportDisconnection(openRequests, new Http.ConnectionException(error), retry)
+  def reportDisconnection(openRequests: Queue[RequestContext], error: Http.ConnectionException, retry: RetryMode): Unit = {
+    context.parent ! Disconnected(openRequests.size)
+    openRequests foreach clear(error, retry)
+  }
 
-  def clear(errorMsg: String, retry: Boolean): RequestContext ⇒ Unit = {
-    case ctx @ RequestContext(request, retriesLeft, _) if retry && request.canBeRetried && retriesLeft > 0 ⇒
-      log.warning("{} in response to {} with {} retries left, retrying...", errorMsg, format(request), retriesLeft)
+  def clear(error: String, retry: RetryMode): RequestContext ⇒ Unit = clear(new Http.ConnectionException(error), retry)
+  def clear(error: Http.ConnectionException, retry: RetryMode): RequestContext ⇒ Unit = {
+    case ctx @ RequestContext(request, retriesLeft, _, _) if retry.shouldRetry(request) && retriesLeft > 0 ⇒
+      log.warning("{} in response to {} with {} retries left, retrying...", error.getMessage, format(request), retriesLeft)
       context.parent ! ctx.copy(retriesLeft = retriesLeft - 1)
 
-    case RequestContext(request, _, commander) ⇒
-      log.warning("{} in response to {} with no retries left, dispatching error...", errorMsg, format(request))
-      commander ! Status.Failure(new RuntimeException(errorMsg))
+    case ctx: RequestContext ⇒
+      log.warning("{} in response to {} with no retries left, dispatching error...", error.getMessage, format(ctx.request))
+
+      dispatchToCommander(ctx, Status.Failure(error))
   }
 
   def dispatchToServer(httpConnection: ActorRef)(ctx: RequestContext): Unit = {
@@ -179,7 +248,13 @@ private[client] class HttpHostConnectionSlot(remoteAddress: InetSocketAddress,
     httpConnection ! ctx.request
   }
 
-  def format(part: HttpMessagePart) = part match {
+  def dispatchToCommander(requestContext: RequestContext, message: Any): Unit = {
+    val RequestContext(request, _, _, commander) = requestContext
+    if (log.isDebugEnabled) log.debug("Delivering {} for {}", formatResponse(message), format(request))
+    commander ! message
+  }
+
+  def format(part: HttpMessagePart): String = part match {
     case x: HttpRequestPart with HttpMessageStart ⇒
       val request = x.message.asInstanceOf[HttpRequest]
       s"${request.method} request to ${request.uri}"
@@ -187,10 +262,26 @@ private[client] class HttpHostConnectionSlot(remoteAddress: InetSocketAddress,
     case x                     ⇒ x.toString
   }
 
-  def formatResponse(part: HttpResponsePart) = part match {
+  def formatResponse(response: Any): String = response match {
     case HttpResponse(status, _, _, _) ⇒ status.value.toString + " response"
     case ChunkedResponseStart(HttpResponse(status, _, _, _)) ⇒ status.value.toString + " response start"
     case MessageChunk(body, _) ⇒ body.length.toString + " byte response chunk"
+    case Status.Failure(_) ⇒ "Status.Failure"
     case x ⇒ x.toString
+  }
+}
+
+private object HttpHostConnectionSlot {
+  sealed trait RetryMode {
+    def shouldRetry(request: HttpRequest): Boolean
+  }
+  case object RetryAlways extends RetryMode {
+    def shouldRetry(request: HttpRequest): Boolean = true
+  }
+  case object RetryNever extends RetryMode {
+    def shouldRetry(request: HttpRequest): Boolean = false
+  }
+  case object RetryIdempotent extends RetryMode {
+    def shouldRetry(request: HttpRequest): Boolean = request.canBeRetried
   }
 }

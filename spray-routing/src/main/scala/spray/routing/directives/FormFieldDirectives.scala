@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,13 +26,13 @@ trait FormFieldDirectives extends ToNameReceptaclePimps {
    * Rejects the request if the form field parameter matcher(s) defined by the definition(s) don't match.
    * Otherwise the field content(s) are extracted and passed to the inner route.
    */
-  def formField(fdm: FieldDefMagnet): fdm.Out = fdm()
+  /* directive */ def formField(fdm: FieldDefMagnet): fdm.Out = fdm()
 
   /**
    * Rejects the request if the form field parameter matcher(s) defined by the definition(s) don't match.
    * Otherwise the field content(s) are extracted and passed to the inner route.
    */
-  def formFields(fdm: FieldDefMagnet): fdm.Out = fdm()
+  /* directive */ def formFields(fdm: FieldDefMagnet): fdm.Out = fdm()
 
 }
 
@@ -53,28 +53,21 @@ trait FieldDefMagnet2[T] {
   type Out
   def apply(value: T): Out
 }
-object FieldDefMagnet2 {
-  implicit def apply[A, B](implicit fdma: FieldDefMagnetAux[A, B]) = new FieldDefMagnet2[A] {
-    type Out = B
-    def apply(value: A) = fdma(value)
-  }
-}
 
-trait FieldDefMagnetAux[A, B] extends (A ⇒ B)
+object FieldDefMagnet2 extends ToNameReceptaclePimps {
+  type FieldDefMagnetAux[A, B] = FieldDefMagnet2[A] { type Out = B }
+  def FieldDefMagnetAux[A, B](f: A ⇒ B) = new FieldDefMagnet2[A] { type Out = B; def apply(value: A) = f(value) }
 
-object FieldDefMagnetAux extends ToNameReceptaclePimps {
-  import spray.httpx.unmarshalling.{ Unmarshaller ⇒ UM, FormFieldConverter ⇒ FFC, FromEntityOptionUnmarshaller ⇒ FEOU, _ }
+  import spray.httpx.unmarshalling.{ FromRequestUnmarshaller ⇒ UM, FormFieldConverter ⇒ FFC, FromBodyPartOptionUnmarshaller ⇒ FBPOU, _ }
   import BasicDirectives._
   import RouteDirectives._
-
-  def apply[A, B](f: A ⇒ B) = new FieldDefMagnetAux[A, B] { def apply(value: A) = f(value) }
 
   /************ "regular" field extraction ******************/
 
   def extractField[A, B](f: A ⇒ Directive1[B]) = FieldDefMagnetAux[A, Directive1[B]](f)
 
   private def filter[A, B](nr: NameReceptacle[A])(implicit ev1: UM[HttpForm], ev2: FFC[B]): Directive1[B] =
-    extract(_.request.entity.as[HttpForm].right.flatMap(_.field(nr.name).as[B])).flatMap {
+    extract(_.request.as[HttpForm].right.flatMap(_.field(nr.name).as[B])).flatMap {
       case Right(value)                       ⇒ provide(value)
       case Left(ContentExpected)              ⇒ reject(MissingFormFieldRejection(nr.name))
       case Left(MalformedContent(msg, cause)) ⇒ reject(MalformedFormFieldRejection(nr.name, msg, cause))
@@ -84,7 +77,7 @@ object FieldDefMagnetAux extends ToNameReceptaclePimps {
     extractField[String, String](string ⇒ filter(string))
   implicit def forSymbol(implicit ev1: UM[HttpForm], ev2: FFC[String]) =
     extractField[Symbol, String](symbol ⇒ filter(symbol))
-  implicit def forNDesR[T](implicit ev1: UM[HttpForm], ev2: FEOU[T] = null) =
+  implicit def forNDesR[T](implicit ev1: UM[HttpForm], ev2: FBPOU[T] = null) =
     extractField[NameDeserializerReceptacle[T], T] { ndr ⇒
       filter(NameReceptacle[T](ndr.name))(ev1, FFC.fromFSOD(ndr.deserializer))
     }
@@ -92,7 +85,7 @@ object FieldDefMagnetAux extends ToNameReceptaclePimps {
     extractField[NameDefaultReceptacle[T], T] { ndr ⇒
       filter(NameReceptacle[T](ndr.name))(ev1, ev2.withDefault(ndr.default))
     }
-  implicit def forNDesDefR[T](implicit ev1: UM[HttpForm], ev2: FEOU[T] = null) =
+  implicit def forNDesDefR[T](implicit ev1: UM[HttpForm], ev2: FBPOU[T] = null) =
     extractField[NameDeserializerDefaultReceptacle[T], T] { ndr ⇒
       filter(NameReceptacle[T](ndr.name))(ev1, FFC.fromFSOD(ndr.deserializer.withDefaultValue(ndr.default)))
     }
@@ -101,8 +94,8 @@ object FieldDefMagnetAux extends ToNameReceptaclePimps {
 
   /************ tuple support ******************/
 
-  implicit def forTuple[T <: Product, L <: HList, Out](implicit hla: HListerAux[T, L], fdma: FieldDefMagnetAux[L, Out]) =
-    FieldDefMagnetAux[T, Out](tuple ⇒ fdma(hla(tuple)))
+  implicit def forTuple[T <: Product, L <: HList, Out0](implicit hla: HListerAux[T, L], fdma: FieldDefMagnetAux[L, Out0]) =
+    FieldDefMagnetAux[T, Out0](tuple ⇒ fdma(hla(tuple)))
 
   /************ HList support ******************/
 
