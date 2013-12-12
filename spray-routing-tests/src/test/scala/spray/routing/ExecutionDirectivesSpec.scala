@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 package spray.routing
 
+import spray.http.StatusCodes.InternalServerError
+
 class ExecutionDirectivesSpec extends RoutingSpec {
 
   "the 'dynamicIf' directive" should {
@@ -23,13 +25,34 @@ class ExecutionDirectivesSpec extends RoutingSpec {
       var a = ""
       val staticRoute = get { dynamicIf(enabled = false) { a += "x"; complete(a) } }
       val dynamicRoute = get { dynamic { a += "x"; complete(a) } }
-      def expect(route: Route, s: String) = Get() ~> route ~> check { entityAs[String] === s }
+      def expect(route: Route, s: String) = Get() ~> route ~> check { responseAs[String] === s }
       expect(staticRoute, "x")
       expect(staticRoute, "x")
       expect(staticRoute, "x")
       expect(dynamicRoute, "xx")
       expect(dynamicRoute, "xxx")
       expect(dynamicRoute, "xxxx")
+    }
+  }
+
+  "the 'detach directive" should {
+    "handle exceptions thrown inside its inner future" in {
+
+      implicit val exceptionHandler = ExceptionHandler {
+        case e: ArithmeticException ⇒ ctx ⇒
+          ctx.complete(InternalServerError, "Oops.")
+      }
+
+      val route = get {
+        detach() {
+          complete((3 / 0).toString)
+        }
+      }
+
+      Get() ~> route ~> check {
+        status === InternalServerError
+        responseAs[String] === "Oops."
+      }
     }
   }
 }

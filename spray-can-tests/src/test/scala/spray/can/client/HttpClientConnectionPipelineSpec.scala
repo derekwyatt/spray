@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ import spray.http._
 class HttpClientConnectionPipelineSpec extends Specification with RawSpecs2PipelineStageTest with NoTimeConversions {
   type Context = SslTlsContext
 
-  val stage = HttpClientConnection.pipelineStage(ClientConnectionSettings(system))
+  def stage = HttpClientConnection.pipelineStage(ClientConnectionSettings(system))
 
   "The HttpClient pipeline" should {
 
@@ -66,6 +66,38 @@ class HttpClientConnectionPipelineSpec extends Specification with RawSpecs2Pipel
       commands.expectMsg(Pipeline.Tell(probe.ref, response, connectionActor))
     }
 
+    "dispatch a keep-alive HttpResponse back to the sender" in new Fixture(stage) {
+      val probe = TestProbe()
+      probe.send(connectionActor, Http.MessageCommand(HttpRequest()))
+      commands.expectMsgType[Tcp.Write]
+
+      connectionActor ! Tcp.Received(ByteString(rawResponse("123")))
+      commands.expectMsg(Pipeline.Tell(probe.ref, response("123"), connectionActor))
+      commands.expectNoMsg(100.millis)
+    }
+
+    "dispatch a 'Connection: close' HttpResponse back to the sender and close the connection" in new Fixture(stage) {
+      val probe = TestProbe()
+      probe.send(connectionActor, Http.MessageCommand(HttpRequest()))
+      commands.expectMsgType[Tcp.Write]
+
+      connectionActor ! Tcp.Received(ByteString(rawResponse("123", "Connection: close")))
+      commands.expectMsg(Pipeline.Tell(probe.ref, response("123", HttpHeaders.Connection("close")), connectionActor))
+      commands.expectMsg(Tcp.Close)
+    }
+
+    "be able to deal with PeerClosed events after response completion" in new Fixture(stage) {
+      val probe = TestProbe()
+      probe.send(connectionActor, Http.MessageCommand(HttpRequest()))
+      commands.expectMsgType[Tcp.Write]
+
+      connectionActor ! Tcp.Received(ByteString(rawResponse("123")))
+      connectionActor ! Tcp.PeerClosed
+      commands.expectMsg(Pipeline.Tell(probe.ref, response("123"), connectionActor))
+      commands.expectMsg(Tcp.Close)
+      commands.expectNoMsg(100.millis)
+    }
+
     "dispatch an aggregated chunked response back to the sender" in new Fixture(stage) {
       val (probe, probeRef) = probeAndRef()
       probe.send(connectionActor, Http.MessageCommand(HttpRequest()))
@@ -76,7 +108,7 @@ class HttpClientConnectionPipelineSpec extends Specification with RawSpecs2Pipel
       }
       commands.expectMsgPF() {
         case Pipeline.Tell(`probeRef`, response: HttpResponse, `connectionActor`) ⇒ response.entity
-      } === HttpEntity("body123body123")
+      } === HttpEntity(ContentTypes.`text/plain(UTF-8)`, HttpData("body123") +: HttpData("body123"))
     }
 
     "properly complete a 3 requests pipelined dialog" in new Fixture(stage) {
@@ -109,7 +141,7 @@ class HttpClientConnectionPipelineSpec extends Specification with RawSpecs2Pipel
            |Server: spray/1.0
            |Date: Thu, 25 Aug 2011 09:10:29 GMT
            |Content-Length: 8
-           |Content-Type: text/plain
+           |Content-Type: text/plain; charset=UTF-8
            |
            |"""
       }))

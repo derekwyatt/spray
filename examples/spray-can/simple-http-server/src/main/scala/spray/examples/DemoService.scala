@@ -10,9 +10,9 @@ import spray.util._
 import spray.http._
 import HttpMethods._
 import MediaTypes._
+import spray.can.Http.RegisterChunkHandler
 
-
-class DemoService extends Actor with SprayActorLogging {
+class DemoService extends Actor with ActorLogging {
   implicit val timeout: Timeout = 1.second // for the actor 'asks'
   import context.dispatcher // ExecutionContext for the futures and scheduler
 
@@ -46,7 +46,17 @@ class DemoService extends Actor with SprayActorLogging {
 
     case HttpRequest(GET, Uri.Path("/stop"), _, _, _) =>
       sender ! HttpResponse(entity = "Shutting down in 1 second ...")
+      sender ! Http.Close
       context.system.scheduler.scheduleOnce(1.second) { context.system.shutdown() }
+
+    case r@HttpRequest(POST, Uri.Path("/file-upload"), headers, entity: HttpEntity.NonEmpty, protocol) =>
+      // emulate chunked behavior for POST requests to this path
+      r.asPartStream().foreach(self.tell(_, sender))
+
+    case s@ChunkedRequestStart(HttpRequest(POST, Uri.Path("/file-upload"), _, _, _)) =>
+      val client = sender
+      val handler = context.actorOf(Props(new FileUploadHandler(client, s)))
+      sender ! RegisterChunkHandler(handler)
 
     case _: HttpRequest => sender ! HttpResponse(status = 404, entity = "Unknown resource!")
 
@@ -77,6 +87,12 @@ class DemoService extends Actor with SprayActorLogging {
             <li><a href="/timeout/timeout">/timeout/timeout</a></li>
             <li><a href="/stop">/stop</a></li>
           </ul>
+          <p>Test file upload</p>
+          <form action ="/file-upload" enctype="multipart/form-data" method="post">
+            <input type="file" name="datafile" multiple=""></input>
+            <br/>
+            <input type="submit">Submit</input>
+          </form>
         </body>
       </html>.toString()
     )
@@ -102,7 +118,7 @@ class DemoService extends Actor with SprayActorLogging {
     )
   )
 
-  class Streamer(client: ActorRef, count: Int) extends Actor with SprayActorLogging {
+  class Streamer(client: ActorRef, count: Int) extends Actor with ActorLogging {
     log.debug("Starting streaming response ...")
 
     // we use the successful sending of a chunk as trigger for scheduling the next chunk

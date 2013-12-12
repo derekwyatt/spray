@@ -39,12 +39,15 @@ Afterwards just ``import spray.caching._`` to bring all relevant identifiers int
 The `Cache` Interface
 ---------------------
 
-All *spray-caching* cache implementations implement the Cache_ trait, which allow you to interact with the cache
-in through six methods:
+All *spray-caching* cache implementations implement the Cache_ trait, which allows you to interact with the cache
+through six methods:
 
 .. rst-class:: wide
 
-- ``def apply(key: Any)(expr: => V): Future[V]`` wraps an "expensive" expression with caching support.
+- ``def apply(key: Any)(expr: => V): Future[V]`` wraps an "expensive" expression with caching support. Note, that
+  the generation expression is never run inside a ``Future`` with this overload. Instead, either, the cache already
+  contains an entry for the key in which case the existing result is returned, or the generating expression is
+  synchronously run to produce the value.
 
 - ``def apply(key: Any)(future: => Future[V]): Future[V]`` is similar, but allows the expression to produce
   the future itself.
@@ -77,8 +80,8 @@ both featuring last-recently-used cache eviction semantics and both internally w
 They difference between the two only consists of whether they support time-based entry expiration or not.
 
 The easiest way to construct a cache instance is via the ``apply`` method of the ``LruCache`` object, which has the
-following signature and creates a new ``ExpiringLruCache`` or ``SimpleLruCache`` depending on whether a non-zero and
-finite ``timeToLive`` and/or ``timeToIdle`` is set or not:
+following signature and creates a new ``ExpiringLruCache`` or ``SimpleLruCache`` depending on whether
+``timeToLive`` and/or ``timeToIdle`` are finite (= expiring) or infinite:
 
 .. includecode:: /../spray-caching/src/main/scala/spray/caching/LruCache.scala
    :snippet: source-quote-LruCache-apply
@@ -97,7 +100,7 @@ ExpiringLruCache
 This implementation has the same limited capacity behavior as the ``SimpleLruCache`` but in addition supports
 time-to-live as well as time-to-idle expiration.
 The former provides an upper limit to the time period an entry is allowed to remain in the cache while the latter
-limits the maximum time an entry is kept without having been accessed. If both values are non-zero the time-to-live
+limits the maximum time an entry is kept without having been accessed. If both values are finite the time-to-live
 has to be strictly greater than the time-to-idle.
 
 .. note:: Expired entries are only evicted upon next access (or by being thrown out by the capacity constraint), so

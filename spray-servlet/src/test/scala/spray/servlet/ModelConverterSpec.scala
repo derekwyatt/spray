@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,13 +33,16 @@ class ModelConverterSpec extends Specification with NoTimeConversions {
   implicit def noLogging = NoLogging
   val settings = ConnectorSettings(
     bootClass = "xxx",
-    requestTimeout = Duration.Undefined,
-    timeoutTimeout = Duration.Undefined,
+    requestTimeout = Duration.Inf,
+    timeoutTimeout = Duration.Inf,
     timeoutHandler = "",
     rootPath = Uri.Path.Empty,
     remoteAddressHeader = false,
     verboseErrorMessages = true,
-    maxContentLength = 16)
+    maxContentLength = 16,
+    servletRequestAccess = false,
+    illegalHeaderWarnings = false,
+    uriParsingMode = Uri.ParsingMode.Relaxed)
 
   val remoteAddress = `Remote-Address`("127.0.0.7")
   val textPlain = `Content-Type`(ContentTypes.`text/plain`)
@@ -69,8 +72,9 @@ class ModelConverterSpec extends Specification with NoTimeConversions {
         ModelConverter.toHttpRequest {
           RequestMock(
             content = c,
-            headers = "Content-Type" -> "text/plain" :: Nil)
-        } === HttpRequest(entity = c, headers = textPlain :: Nil)
+            headers = "Content-Type" -> "text/plain" :: "Content-Length" -> "illegal" :: Nil)
+        } === HttpRequest(entity = HttpEntity(ContentTypes.`text/plain`, c),
+          headers = textPlain :: RawHeader("Content-Length", "illegal") :: Nil)
       }
       "example 6" in {
         implicit def s = settings
@@ -83,12 +87,26 @@ class ModelConverterSpec extends Specification with NoTimeConversions {
         ModelConverter.toHttpRequest(RequestMock(headers = "Cookie" -> "foo=bar; bar=baz" :: Nil)) ===
           HttpRequest(headers = Cookie(HttpCookie("foo", "bar"), HttpCookie("bar", "baz")) :: Nil)
       }
+      "example 8" in {
+        implicit def s = settings.copy(uriParsingMode = Uri.ParsingMode.RelaxedWithRawQuery)
+        val queryMock = new RequestMock("https://foo.bar/abc/def") {
+          override def getQueryString: String = "a=1&b=2&b=3=4&c"
+        }
+        ModelConverter.toHttpRequest(queryMock).uri.query === Uri.Query.Raw("a=1&b=2&b=3=4&c")
+      }
+    }
+
+    "should provide access to javax.servlet.http.HttpServletRequest via a header if spray.servlet.servlet-request-access is enabled" in {
+      "example 1" in {
+        implicit def s = settings.copy(servletRequestAccess = true)
+        ModelConverter.toHttpRequest(RequestMock()) === HttpRequest(headers = ServletRequestInfoHeader(RequestMock()) :: Nil)
+      }
     }
   }
 
   case class RequestMock(uri: Uri = Uri./,
                          method: String = "GET",
-                         remoteAddr: String = remoteAddress.ip.value,
+                         remoteAddr: String = remoteAddress.address.value,
                          content: String = "",
                          headers: Seq[(String, String)] = Nil) extends HttpServletRequest {
     import scala.collection.JavaConverters._

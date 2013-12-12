@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
- * Based on code copyright (C) 2010-2011 by the BlueEyes Web Framework Team (http://github.com/jdegoes/blueeyes)
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +22,7 @@ import scala.annotation.tailrec
 import scala.collection.{ mutable, LinearSeqOptimized }
 import scala.collection.immutable.LinearSeq
 import spray.http.parser.{ ParserInput, UriParser }
+import spray.util._
 import UriParser._
 import Uri._
 
@@ -40,11 +40,92 @@ sealed abstract case class Uri(scheme: String, authority: Authority, path: Path,
   def inspect: String = s"Uri(scheme=$scheme, authority=$authority, path=$path, query=$query, fragment=$fragment)"
 
   /**
+   * The effective port of this Uri given the currently set authority and scheme values.
+   * If the authority has an explicitly set port (i.e. a non-zero port value) then this port
+   * is the effective port. Otherwise the default port for the current scheme is returned.
+   */
+  def effectivePort: Int = if (authority.port != 0) authority.port else defaultPorts(scheme)
+
+  /**
    * Returns a copy of this Uri with the given components.
    */
   def copy(scheme: String = scheme, authority: Authority = authority, path: Path = path,
            query: Query = query, fragment: Option[String] = fragment): Uri =
     Uri(scheme, authority, path, query, fragment)
+
+  /**
+   * Returns a copy of this Uri with the given scheme. The `scheme` change of the Uri has the following
+   * effect on the port value:
+   * - If the Uri has a non-default port for the scheme before the change this port will remain unchanged.
+   * - If the Uri has the default port for the scheme before the change it will have the default port for
+   *   the '''new''' scheme after the change.
+   */
+  def withScheme(scheme: String): Uri = copy(scheme = scheme)
+
+  /**
+   * Returns a copy of this Uri with the given authority.
+   */
+  def withAuthority(authority: Authority): Uri = copy(authority = authority)
+
+  /**
+   * Returns a copy of this Uri with a Authority created using the given host, port and userinfo.
+   */
+  def withAuthority(host: Host, port: Int, userinfo: String = ""): Uri = copy(authority = Authority(host, port, userinfo))
+
+  /**
+   * Returns a copy of this Uri with a Authority created using the given host and port.
+   */
+  def withAuthority(host: String, port: Int): Uri = copy(authority = Authority(Host(host), port))
+
+  /**
+   * Returns a copy of this Uri with the given host.
+   */
+  def withHost(host: Host): Uri = copy(authority = authority.copy(host = host))
+
+  /**
+   * Returns a copy of this Uri with the given host.
+   */
+  def withHost(host: String): Uri = copy(authority = authority.copy(host = Host(host)))
+
+  /**
+   * Returns a copy of this Uri with the given port.
+   */
+  def withPort(port: Int): Uri = copy(authority = authority.copy(port = port))
+
+  /**
+   * Returns a copy of this Uri with the given path.
+   */
+  def withPath(path: Path): Uri = copy(path = path)
+
+  /**
+   * Returns a copy of this Uri with the given userinfo.
+   */
+  def withUserInfo(userinfo: String): Uri = copy(authority = authority.copy(userinfo = userinfo))
+
+  /**
+   * Returns a copy of this Uri with the given query.
+   */
+  def withQuery(query: Query): Uri = copy(query = query)
+
+  /**
+   * Returns a copy of this Uri with a Query created using the given query string.
+   */
+  def withQuery(query: String): Uri = copy(query = Query(query))
+
+  /**
+   * Returns a copy of this Uri with a Query created using the given (key, value) tuples.
+   */
+  def withQuery(kvp: (String, String)*): Uri = copy(query = Query(kvp: _*))
+
+  /**
+   * Returns a copy of this Uri with a Query created using the given map.
+   */
+  def withQuery(map: Map[String, String]): Uri = copy(query = Query(map))
+
+  /**
+   * Returns a copy of this Uri with the given fragment.
+   */
+  def withFragment(fragment: String): Uri = copy(fragment = fragment.toOption)
 
   /**
    * Returns a new absolute Uri that is the result of the resolution process defined by
@@ -87,10 +168,22 @@ sealed abstract case class Uri(scheme: String, authority: Authority, path: Path,
    * Converts this URI to an "effective HTTP request URI" as defined by
    * http://tools.ietf.org/html/draft-ietf-httpbis-p1-messaging-22#section-5.5.
    */
-  def toEffectiveHttpRequestUri(securedConnection: Boolean, hostHeaderHost: Host, hostHeaderPort: Int,
+  def toEffectiveHttpRequestUri(hostHeaderHost: Host, hostHeaderPort: Int, securedConnection: Boolean = false,
                                 defaultAuthority: Authority = Authority.Empty): Uri =
     effectiveHttpRequestUri(scheme, authority.host, authority.port, path, query, fragment, securedConnection,
       hostHeaderHost, hostHeaderPort, defaultAuthority)
+
+  /**
+   * Converts this URI into a relative URI by keeping the path, query and fragment, but dropping the scheme and authority.
+   */
+  def toRelative =
+    Uri(path = if (path.isEmpty) Uri.Path./ else path, query = query, fragment = fragment)
+
+  /**
+   * Drops the fragment from this URI
+   */
+  def withoutFragment =
+    copy(fragment = None)
 }
 
 object Uri {
@@ -146,7 +239,7 @@ object Uri {
   def apply(scheme: String = "", authority: Authority = Authority.Empty, path: Path = Path.Empty,
             query: Query = Query.Empty, fragment: Option[String] = None): Uri = {
     val p = verifyPath(path, scheme, authority.host)
-    Impl(
+    create(
       scheme = normalizeScheme(scheme),
       authority = authority.normalizedFor(scheme),
       path = if (scheme.isEmpty) p else collapseDotSegments(p),
@@ -163,7 +256,7 @@ object Uri {
   def from(scheme: String = "", userinfo: String = "", host: String = "", port: Int = 0, path: String = "",
            query: Query = Query.Empty, fragment: Option[String] = None,
            mode: Uri.ParsingMode = Uri.ParsingMode.Relaxed): Uri =
-    apply(scheme, Authority(Host(host, mode), normalizePort(port, scheme), userinfo), Path(path), query, fragment)
+    apply(scheme, Authority(Host(host, UTF8, mode), normalizePort(port, scheme), userinfo), Path(path), query, fragment)
 
   /**
    * Parses a string into a normalized absolute URI as defined by http://tools.ietf.org/html/rfc3986#section-4.3.
@@ -220,7 +313,7 @@ object Uri {
     var _host = host
     var _port = port
     if (_scheme.isEmpty) {
-      _scheme = if (securedConnection) "https" else "http"
+      _scheme = httpScheme(securedConnection)
       if (_host.isEmpty) {
         if (hostHeaderHost.isEmpty) {
           _host = defaultAuthority.host
@@ -231,8 +324,10 @@ object Uri {
         }
       }
     }
-    Impl(_scheme, "", _host, _port, collapseDotSegments(path), query, fragment)
+    create(_scheme, "", _host, _port, collapseDotSegments(path), query, fragment)
   }
+
+  def httpScheme(securedConnection: Boolean = false) = if (securedConnection) "https" else "http"
 
   case class Authority(host: Host, port: Int = 0, userinfo: String = "") extends ToStringRenderable {
     def isEmpty = host.isEmpty
@@ -248,6 +343,8 @@ object Uri {
         }
         else r
       }
+    def normalizedForHttp(encrypted: Boolean = false) =
+      normalizedFor(httpScheme(encrypted))
     def normalizedFor(scheme: String): Authority = {
       val normalizedPort = normalizePort(port, scheme)
       if (normalizedPort == port) this else copy(port = normalizedPort)
@@ -269,7 +366,7 @@ object Uri {
       def toOption = None
       def render[R <: Rendering](r: R): r.type = r
     }
-    def apply(string: String, mode: Uri.ParsingMode = Uri.ParsingMode.Relaxed): Host =
+    def apply(string: String, charset: Charset = UTF8, mode: Uri.ParsingMode = Uri.ParsingMode.Relaxed): Host =
       if (!string.isEmpty) {
         val parser = new UriParser(string, UTF8, mode)
         import parser._
@@ -415,6 +512,11 @@ object Uri {
         if (q.isEmpty) result else fetch(q.tail, if (q.key == key) q.value :: result else result)
       fetch(this)
     }
+    def toMap: Map[String, String] = {
+      @tailrec def append(map: Map[String, String], q: Query): Map[String, String] =
+        if (q.isEmpty) map else append(map.updated(q.key, q.value), q.tail)
+      append(Map.empty, this)
+    }
     def toMultiMap: Map[String, List[String]] = {
       @tailrec def append(map: Map[String, List[String]], q: Query): Map[String, List[String]] =
         if (q.isEmpty) map else append(map.updated(q.key, q.value :: map.getOrElse(q.key, Nil)), q.tail)
@@ -429,7 +531,8 @@ object Uri {
           case Query.Cons(key, value, tail) ⇒
             if (q ne this) r ~~ '&'
             enc(key)
-            if (!value.isEmpty) { r ~~ '='; enc(value) }
+            if (value ne Query.EmptyValue) r ~~ '='
+            enc(value)
             append(tail)
           case Query.Raw(value) ⇒ r ~~ value
         }
@@ -438,14 +541,17 @@ object Uri {
     override def newBuilder: mutable.Builder[(String, String), Query] = Query.newBuilder
   }
   object Query {
+    /** A special empty String value which will be rendered without a '=' after the key. */
+    val EmptyValue: String = new String(Array.empty[Char])
+
     /**
      * Parses the given String into a Query instance.
      * Note that this method will never return Query.Empty, even for the empty String.
      * Empty strings will be parsed to `("", "") +: Query.Empty`
      * If you want to allow for Query.Empty creation use the apply overload taking an `Option[String`.
      */
-    def apply(string: String, mode: Uri.ParsingMode = Uri.ParsingMode.Relaxed): Query = {
-      val parser = new UriParser(string, UTF8, mode)
+    def apply(string: String, charset: Charset = UTF8, mode: Uri.ParsingMode = Uri.ParsingMode.Relaxed): Query = {
+      val parser = new UriParser(string, charset, mode)
       import parser._
       complete("Query", query)
       _query
@@ -453,7 +559,7 @@ object Uri {
     def apply(input: Option[String]): Query = apply(input, Uri.ParsingMode.Relaxed)
     def apply(input: Option[String], mode: Uri.ParsingMode): Query = input match {
       case None         ⇒ Query.Empty
-      case Some(string) ⇒ apply(string, mode)
+      case Some(string) ⇒ apply(string, mode = mode)
     }
     def apply(kvp: (String, String)*): Query =
       kvp.foldRight(Query.Empty: Query) { case ((key, value), acc) ⇒ Cons(key, value, acc) }
@@ -519,7 +625,7 @@ object Uri {
       if (host.isEmpty)
         if (path.isEmpty) {
           val q = if (query.isEmpty) base.query else query
-          Impl(base.scheme, base.authority, base.path, q, fragment)
+          create(base.scheme, base.authority, base.path, q, fragment)
         } else {
           // http://tools.ietf.org/html/rfc3986#section-5.2.3
           def mergePaths(base: Uri, path: Path): Path =
@@ -534,10 +640,10 @@ object Uri {
               replaceLastSegment(base.path, path)
             }
           val p = if (path.startsWithSlash) path else mergePaths(base, path)
-          Impl(base.scheme, base.authority, collapseDotSegments(p), query, fragment)
+          create(base.scheme, base.authority, collapseDotSegments(p), query, fragment)
         }
-      else Impl(base.scheme, userinfo, host, port, collapseDotSegments(path), query, fragment)
-    else Impl(scheme, userinfo, host, port, collapseDotSegments(path), query, fragment)
+      else create(base.scheme, userinfo, host, port, collapseDotSegments(path), query, fragment)
+    else create(scheme, userinfo, host, port, collapseDotSegments(path), query, fragment)
   }
 
   private[http] def encode(r: Rendering, string: String, charset: Charset, keep: Int,
@@ -658,17 +764,12 @@ object Uri {
   private[http] def fail(summary: String, detail: String = "") =
     throw new IllegalUriException(ErrorInfo(summary, detail))
 
-  private[http] class Impl private (scheme: String, authority: Authority, path: Path, query: Query,
-                                    fragment: Option[String]) extends Uri(scheme, authority, path, query, fragment) {
-    def isEmpty = false
-  }
+  private[http] def create(scheme: String, userinfo: String, host: Host, port: Int, path: Path, query: Query,
+                           fragment: Option[String]): Uri =
+    create(scheme, Authority(host, normalizePort(port, scheme), userinfo), path, query, fragment)
 
-  private[http] object Impl {
-    def apply(scheme: String, authority: Authority, path: Path, query: Query, fragment: Option[String]): Uri =
-      if (path.isEmpty && scheme.isEmpty && authority.isEmpty && query.isEmpty && fragment.isEmpty) Empty
-      else new Impl(scheme, authority, path, query, fragment)
-    def apply(scheme: String, userinfo: String, host: Host, port: Int, path: Path, query: Query,
-              fragment: Option[String]): Uri =
-      apply(scheme, Authority(host, normalizePort(port, scheme), userinfo), path, query, fragment)
-  }
+  private[http] def create(scheme: String, authority: Authority, path: Path, query: Query,
+                           fragment: Option[String]): Uri =
+    if (path.isEmpty && scheme.isEmpty && authority.isEmpty && query.isEmpty && fragment.isEmpty) Empty
+    else new Uri(scheme, authority, path, query, fragment) { def isEmpty = false }
 }

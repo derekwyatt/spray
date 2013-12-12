@@ -58,7 +58,7 @@ The basic structure of a test built with *spray-testkit* is this (expression pla
 
 In this template *REQUEST* is an expression evaluating to an ``HttpRequest`` instance. Since both *RouteTest* traits
 extend the *spray-httpx* :ref:`RequestBuilding` trait you have access to its mini-DSL for convenient and concise request
-construction.
+construction. [1]_
 
 *ROUTE* is an expression evaluating to a *spray-routing* ``Route``. You can specify one inline or simply refer to the
 route structure defined in your service.
@@ -79,7 +79,7 @@ The following inspectors are defined:
 ================================================ =======================================================================
 Inspector                                        Description
 ================================================ =======================================================================
-``body: HttpBody``                               Returns the contents of the response entity. If the response entity is
+``body: HttpEntity.NonEmpty``                    Returns the contents of the response entity. If the response entity is
                                                  empty a test failure is triggered.
 ``charset: HttpCharset``                         Identical to ``contentType.charset``
 ``chunks: List[MessageChunk]``                   Returns the list of message chunks produced by the route.
@@ -88,8 +88,6 @@ Inspector                                        Description
 ``contentType: ContentType``                     Identical to ``body.contentType``
 ``definedCharset: Option[HttpCharset]``          Identical to ``contentType.definedCharset``
 ``entity: HttpEntity``                           Identical to ``response.entity``
-``entityAs[T: Unmarshaller: ClassTag]: T``       Unmarshals the response entity using the in-scope ``Unmarshaller`` for
-                                                 the given type. Any errors in the process trigger a test failure.
 ``handled: Boolean``                             Indicates whether the route produced an ``HttpResponse`` for the
                                                  request. If the route rejected the request ``handled`` evaluates to
                                                  ``false``.
@@ -105,11 +103,18 @@ Inspector                                        Description
 ``response: HttpResponse``                       The ``HttpResponse`` returned by the route. If the route did not return
                                                  an ``HttpResponse`` instance (e.g. because it rejected the request) a
                                                  test failure is triggered.
+``responseAs[T: Unmarshaller: ClassTag]: T``     Unmarshals the response entity using the in-scope
+                                                 ``FromResponseUnmarshaller`` for the given type. Any errors in the
+                                                 process trigger a test failure.
 ``status: StatusCode``                           Identical to ``response.status``
 ``trailer: List[HttpHeader]``                    Returns the list of trailer headers the route produced with a
                                                  ``ChunkedMessageEnd`` response part.
 ================================================ =======================================================================
 
+.. [1] If the request URI is relative it will be made absolute using an implicitly available instance of
+        ``DefaultHostInfo`` whose value is "http://example.com" by default. This mirrors the behavior of *spray-can*
+        which always produces absolute URIs for incoming request based on the request URI and the ``Host``-header of
+        the request. You can customize this behavior by bringing an instance of ``DefaultHostInfo`` into scope.
 
 Sealing Routes
 --------------

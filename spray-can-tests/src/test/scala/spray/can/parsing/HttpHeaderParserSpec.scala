@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ import java.lang.{ StringBuilder ⇒ JStringBuilder }
 import com.typesafe.config.{ ConfigFactory, Config }
 import org.specs2.mutable.Specification
 import akka.actor.ActorSystem
-import akka.util.CompactByteString
+import akka.util.ByteString
 import spray.util.Utils._
 import spray.http.HttpHeaders._
 import spray.http.HttpHeader
@@ -104,37 +104,48 @@ class HttpHeaderParserSpec extends Specification {
 
     "prime an empty parser with all defined HeaderValueParsers" in new TestSetup() {
       parser.formatTrie ===
-        """     ┌─\r-\n- EmptyHeader
-          |     |             ┌─c-h-a-r-s-e-t-:- (Accept-Charset)
-          |     |             | └─e-n-c-o-d-i-n-g-:- (Accept-Encoding)
-          |   ┌─a-c-c-e-p-t---l-a-n-g-u-a-g-e-:- (Accept-Language)
-          |   |   |         |                ┌─\r-\n- Accept: */*
-          |   |   |         └─:-(Accept)- -*-/-*-\r-\n- Accept: */*
-          |   |   └─u-t-h-o-r-i-z-a-t-i-o-n-:- (Authorization)
-          |   | ┌─a-c-h-e---c-o-n-t-r-o-l-:-(Cache-Control)- -m-a-x---a-g-e-=-0-\r-\n- Cache-Control: max-age=0
-          |   | |                                             └─n-o---c-a-c-h-e-\r-\n- Cache-Control: no-cache
-          | ┌─c-o-n-n-e-c-t-i-o-n-:-(Connection)- -K-e-e-p---A-l-i-v-e-\r-\n- Connection: Keep-Alive
-          | |     | |                              | ┌─c-l-o-s-e-\r-\n- Connection: close
-          | |     | |                              └─k-e-e-p---a-l-i-v-e-\r-\n- Connection: keep-alive
-          | |     | |             ┌─d-i-s-p-o-s-i-t-i-o-n-:- (Content-Disposition)
-          | |     | |           ┌─e-n-c-o-d-i-n-g-:- (Content-Encoding)
-          | |     | └─t-e-n-t---l-e-n-g-t-h-:-(Content-Length)- -0-\r-\n- Content-Length: 0
-          | |     |             └─t-y-p-e-:- (Content-Type)
-          | |     └─o-k-i-e-:- (Cookie)
-          |-d-a-t-e-:- (Date)
-          | |     ┌─e-x-p-e-c-t-:-(Expect)- -1-0-0---c-o-n-t-i-n-u-e-\r-\n- Expect: 100-continue
-          | |   ┌─h-o-s-t-:- (Host)
-          | | ┌─l-a-s-t---m-o-d-i-f-i-e-d-:- (Last-Modified)
-          | | | | └─o-c-a-t-i-o-n-:- (Location)
-          | | | └─r-e-m-o-t-e---a-d-d-r-e-s-s-:- (Remote-Address)
-          | └─s-e-r-v-e-r-:- (Server)
-          |   |   └─t---c-o-o-k-i-e-:- (Set-Cookie)
-          |   | ┌─t-r-a-n-s-f-e-r---e-n-c-o-d-i-n-g-:- (Transfer-Encoding)
-          |   └─u-s-e-r---a-g-e-n-t-:- (User-Agent)
-          |     | ┌─w-w-w---a-u-t-h-e-n-t-i-c-a-t-e-:- (WWW-Authenticate)
-          |     └─x---f-o-r-w-a-r-d-e-d---f-o-r-:- (X-Forwarded-For)
+        """   ┌─\r-\n- EmptyHeader
+          |   |               ┌─c-h-a-r-s-e-t-:- (Accept-Charset)
+          |   |       ┌─p-t---e-n-c-o-d-i-n-g-:- (Accept-Encoding)
+          |   |       |     | └─l-a-n-g-u-a-g-e-:- (Accept-Language)
+          |   |       |     |                ┌─\r-\n- Accept: */*
+          |   |       |     └─:-(Accept)- -*-/-*-\r-\n- Accept: */*
+          |   |       |                     ┌─a-l-l-o-w---c-r-e-d-e-n-t-i-a-l-s-:- (Access-Control-Allow-Credentials)
+          |   |       |                     |             | ┌─h-e-a-d-e-r-s-:- (Access-Control-Allow-Headers)
+          |   |       |                     |             └─m-e-t-h-o-d-s-:- (Access-Control-Allow-Methods)
+          |   |       |                     |               └─o-r-i-g-i-n-:- (Access-Control-Allow-Origin)
+          | ┌─a-c-c-e-s-s---c-o-n-t-r-o-l---e-x-p-o-s-e---h-e-a-d-e-r-s-:- (Access-Control-Expose-Headers)
+          | |   |                           | ┌─m-a-x---a-g-e-:- (Access-Control-Max-Age)
+          | |   |                           | |               ┌─h-e-a-d-e-r-s-:- (Access-Control-Request-Headers)
+          | |   |                           └─r-e-q-u-e-s-t---m-e-t-h-o-d-:- (Access-Control-Request-Method)
+          | |   └─u-t-h-o-r-i-z-a-t-i-o-n-:- (Authorization)
+          | | ┌─a-c-h-e---c-o-n-t-r-o-l-:-(Cache-Control)- -m-a-x---a-g-e-=-0-\r-\n- Cache-Control: max-age=0
+          | | |                                             └─n-o---c-a-c-h-e-\r-\n- Cache-Control: no-cache
+          | | |   ┌─n-e-c-t-i-o-n-:-(Connection)- -K-e-e-p---A-l-i-v-e-\r-\n- Connection: Keep-Alive
+          | | |   |                                | ┌─c-l-o-s-e-\r-\n- Connection: close
+          | | |   |                                └─k-e-e-p---a-l-i-v-e-\r-\n- Connection: keep-alive
+          | | |   |         ┌─d-i-s-p-o-s-i-t-i-o-n-:- (Content-Disposition)
+          | | |   |         | └─e-n-c-o-d-i-n-g-:- (Content-Encoding)
+          |-c-o-n-t-e-n-t---l-e-n-g-t-h-:-(Content-Length)- -0-\r-\n- Content-Length: 0
+          | |   |           └─t-y-p-e-:- (Content-Type)
+          | |   └─o-k-i-e-:- (Cookie)
+          | |   ┌─d-a-t-e-:- (Date)
+          | |   | └─e-x-p-e-c-t-:-(Expect)- -1-0-0---c-o-n-t-i-n-u-e-\r-\n- Expect: 100-continue
+          | | ┌─h-o-s-t-:- (Host)
+          | | | |   ┌─a-s-t---m-o-d-i-f-i-e-d-:- (Last-Modified)
+          | | | └─l-o-c-a-t-i-o-n-:- (Location)
+          | | |   └─o-r-i-g-i-n-:- (Origin)
+          | └─p-r-o-x-y---a-u-t-h-e-n-t-i-c-a-t-e-:- (Proxy-Authenticate)
+          |   |                   └─o-r-i-z-a-t-i-o-n-:- (Proxy-Authorization)
+          |   |   ┌─r-e-m-o-t-e---a-d-d-r-e-s-s-:- (Remote-Address)
+          |   | ┌─s-e-r-v-e-r-:- (Server)
+          |   | |     └─t---c-o-o-k-i-e-:- (Set-Cookie)
+          |   └─t-r-a-n-s-f-e-r---e-n-c-o-d-i-n-g-:- (Transfer-Encoding)
+          |     | ┌─u-s-e-r---a-g-e-n-t-:- (User-Agent)
+          |     └─w-w-w---a-u-t-h-e-n-t-i-c-a-t-e-:- (WWW-Authenticate)
+          |       └─x---f-o-r-w-a-r-d-e-d---f-o-r-:- (X-Forwarded-For)
           |""".stripMargin
-      parser.formatSizes === "363 nodes, 23 nodeData rows, 34 values"
+      parser.formatSizes === "508 nodes, 30 nodeData rows, 45 values"
       parser.contentHistogram ===
         Map("Connection" -> 3, "Content-Length" -> 1, "Accept" -> 2, "Cache-Control" -> 2, "Expect" -> 1)
     }
@@ -153,6 +164,10 @@ class HttpHeaderParserSpec extends Specification {
 
     "parse and cache a modelled header" in new TestSetup() {
       parseAndCache("Host: spray.io:123\r\nx")("HOST: spray.io:123\r\nx") === Host("spray.io", 123)
+    }
+
+    "parse and cache an invalid modelled header as RawHeader" in new TestSetup() {
+      parseAndCache("Content-Type: abc:123\r\nx")() === RawHeader("Content-Type", "abc:123")
     }
 
     "parse and cache a raw header" in new TestSetup(primed = false) {
@@ -200,8 +215,8 @@ class HttpHeaderParserSpec extends Specification {
       }
       randomHeaders.take(300).foldLeft(0) {
         case (acc, rawHeader) ⇒ acc + parseAndCache(rawHeader.toString + "\r\nx", rawHeader)
-      } === 110
-      parser.formatSizes === "3070 nodes, 106 nodeData rows, 255 values"
+      } === 105
+      parser.formatSizes === "3080 nodes, 108 nodeData rows, 255 values"
     }
 
     "continue parsing modelled headers even if the overall cache capacity is reached" in new TestSetup() {
@@ -212,8 +227,8 @@ class HttpHeaderParserSpec extends Specification {
       }
       randomHostHeaders.take(300).foldLeft(0) {
         case (acc, header) ⇒ acc + parseAndCache(header.toString + "\r\nx", header)
-      } === 221
-      parser.formatSizes === "3204 nodes, 186 nodeData rows, 255 values"
+      } === 210
+      parser.formatSizes === "3209 nodes, 184 nodeData rows, 255 values"
     }
 
     "continue parsing raw headers even if the header-specific cache capacity is reached" in new TestSetup() {
@@ -244,10 +259,10 @@ class HttpHeaderParserSpec extends Specification {
       warnOnIllegalHeader = info ⇒ system.log.warning(info.formatPretty),
       unprimed = !primed)
     def insert(line: String, value: AnyRef): Unit =
-      if (parser.isEmpty) parser.insertRemainingCharsAsNewNodes(CompactByteString(line), value)()
-      else parser.insert(CompactByteString(line), value)()
+      if (parser.isEmpty) parser.insertRemainingCharsAsNewNodes(ByteString(line), value)()
+      else parser.insert(ByteString(line), value)()
 
-    def parseLine(line: String) = parser.parseHeaderLine(CompactByteString(line))() -> parser.resultHeader
+    def parseLine(line: String) = parser.parseHeaderLine(ByteString(line))() -> parser.resultHeader
 
     def parseAndCache(lineA: String)(lineB: String = lineA): HttpHeader = {
       val (ixA, headerA) = parseLine(lineA)

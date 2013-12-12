@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,15 +32,15 @@ class CharsetNegotiationSpec extends RoutingSpec {
       }
     }
     "encode text content using UTF-8 if the Accept-Charset header contains '*'" in {
-      Get() ~> `Accept-Charset`(`ISO-8859-1`, `*`) ~> Hällo ~> check {
+      Get() ~> `Accept-Charset`(`ISO-8859-1`, HttpCharsetRange.`*`) ~> Hällo ~> check {
         contentType === ContentType(`text/plain`, `UTF-8`)
-        entityAs[String] === "Hällö"
+        responseAs[String] === "Hällö"
       }
     }
     "encode text content using the first charset in the Accept-Charset header if '*' is not present" in {
       Get() ~> `Accept-Charset`(`ISO-8859-1`) ~> Hällo ~> check {
         contentType === ContentType(`text/plain`, `ISO-8859-1`)
-        entityAs[String] === "Hällö"
+        responseAs[String] === "Hällö"
       }
     }
   }

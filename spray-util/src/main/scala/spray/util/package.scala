@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,7 @@ package object util {
 
   val EOL = System.getProperty("line.separator")
   val UTF8 = Charset.forName("UTF8")
+  val US_ASCII = Charset.forName("US-ASCII")
   val EmptyByteArray = Array.empty[Byte]
 
   private[this] val _identityFunc: Any ⇒ Any = x ⇒ x
@@ -45,10 +46,10 @@ package object util {
     try body catch { case NonFatal(e) ⇒ onError(e) }
 
   /**
-   * Requires that the given duration is greater than Duration.Zero (finite or infinite) or Duration.Undefined.
+   * Requires that the given duration is greater than Duration.Zero (finite or infinite) or Duration.Inf.
    * This implementation is macro-based and only works if the argument is an identifier or member selector.
    */
-  def requirePositiveOrUndefined(duration: Duration): Duration = macro Macros.requirePositiveOrUndefined
+  def requirePositive(duration: Duration): Duration = macro Macros.requirePositive
 
   def actorSystem(implicit refFactory: ActorRefFactory): ExtendedActorSystem =
     refFactory match {

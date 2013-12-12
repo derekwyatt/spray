@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package spray.routing
 
 import spray.routing.directives.CachingDirectives
+import spray.util.SingletonException
 import spray.http._
 import HttpHeaders.`Cache-Control`
 import CacheDirectives._
@@ -43,28 +44,43 @@ class CachingDirectivesSpec extends RoutingSpec with CachingDirectives {
     }
   }
   def prime(route: Route) = {
-    route(RequestContext(HttpRequest(), system.deadLetters, Uri.Path.Empty).withDefaultSender(system.deadLetters))
+    route(RequestContext(HttpRequest(uri = Uri("http://example.com/")), system.deadLetters, Uri.Path.Empty).withDefaultSender(system.deadLetters))
     route
   }
 
   "the cacheResults directive" should {
     "return and cache the response of the first GET" in {
-      Get() ~> countingService ~> check { entityAs[String] === "1" }
+      Get() ~> countingService ~> check { responseAs[String] === "1" }
     }
     "return the cached response for a second GET" in {
-      Get() ~> prime(countingService) ~> check { entityAs[String] === "1" }
+      Get() ~> prime(countingService) ~> check { responseAs[String] === "1" }
     }
     "return the cached response also for HttpFailures on GETs" in {
       Get() ~> prime(errorService) ~> check { response === HttpResponse(501) }
     }
     "not cache responses for PUTs" in {
-      Put() ~> prime(countingService) ~> check { entityAs[String] === "2" }
+      Put() ~> prime(countingService) ~> check { responseAs[String] === "2" }
     }
     "not cache responses for GETs if the request contains a `Cache-Control: no-cache` header" in {
-      Get() ~> addHeader(`Cache-Control`(`no-cache`)) ~> prime(countingService) ~> check { entityAs[String] === "3" }
+      Get() ~> addHeader(`Cache-Control`(`no-cache`)) ~> prime(countingService) ~> check { responseAs[String] === "3" }
     }
     "not cache responses for GETs if the request contains a `Cache-Control: max-age=0` header" in {
-      Get() ~> addHeader(`Cache-Control`(`max-age`(0))) ~> prime(countingService) ~> check { entityAs[String] === "4" }
+      Get() ~> addHeader(`Cache-Control`(`max-age`(0))) ~> prime(countingService) ~> check { responseAs[String] === "4" }
+    }
+
+    "be transparent to exceptions thrown from its inner route" in {
+      case object MyException extends SingletonException
+      implicit val myExceptionHandler = ExceptionHandler {
+        case MyException ⇒ complete("Good")
+      }
+
+      Get() ~> cache(routeCache()) {
+        _ ⇒ throw MyException // thrown directly
+      } ~> check { responseAs[String] === "Good" }
+
+      Get() ~> cache(routeCache()) {
+        _.failWith(MyException) // bubbling up
+      } ~> check { responseAs[String] === "Good" }
     }
   }
 

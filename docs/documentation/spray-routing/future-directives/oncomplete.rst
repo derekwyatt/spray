@@ -1,6 +1,0 @@
-.. _-onComplete-:
-
-onComplete
-==========
-
-(todo)

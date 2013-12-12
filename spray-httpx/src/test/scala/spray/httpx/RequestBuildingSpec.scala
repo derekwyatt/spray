@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,6 +40,33 @@ class RequestBuildingSpec extends Specification with RequestBuilding {
 
     "support adding headers directly without explicit `addHeader` transformer" >> {
       Get() ~> RawHeader("X-Yeah", "Naah") === HttpRequest(headers = List(RawHeader("X-Yeah", "Naah")))
+    }
+
+    "provide a working `mapHeaders` transformer" >> {
+      Get() ~> addHeader("X-Yeah", "Naah") ~> mapHeaders(_.filterNot(_.name == "X-Yeah")) === HttpRequest(headers = Nil)
+    }
+
+    "provide a working, case-insensitive `removeHeader` transformer" >> {
+      Get() ~> addHeader("X-Yeah", "Naah") ~> removeHeader("X-Yeah") === HttpRequest(headers = Nil)
+      Get() ~> addHeader("X-Yeah", "Naah") ~> removeHeader("x-yEaH") === HttpRequest(headers = Nil)
+    }
+
+    "provide a working `removeHeader` by header type transformer" >> {
+      Get() ~> addHeader("X-Yeah", "Naah") ~> removeHeader[RawHeader] === HttpRequest(headers = Nil)
+      Get() ~> addHeader("X-Yeah", "Naah") ~> addHeader(Authorization(BasicHttpCredentials("bla"))) ~> removeHeader[Authorization] ===
+        HttpRequest(headers = List(RawHeader("X-Yeah", "Naah")))
+    }
+
+    "provide a working, case-insensitive `removeHeaders` transformer" >> {
+      Get() ~> addHeader("X-Yeah", "Naah") ~>
+        addHeader("X-Awesome", "Dude!") ~>
+        addHeader("X-Naah", "Yeah") ~>
+        removeHeaders("X-Yeah", "X-Naah") === HttpRequest(headers = List(RawHeader("X-Awesome", "Dude!")))
+
+      Get() ~> addHeader("X-Yeah", "Naah") ~>
+        addHeader("X-Awesome", "Dude!") ~>
+        addHeader("X-Naah", "Yeah") ~>
+        removeHeaders("x-nAah", "X-YEAH") === HttpRequest(headers = List(RawHeader("X-Awesome", "Dude!")))
     }
 
     "provide the ability to add generic Authorization credentials to the request" >> {

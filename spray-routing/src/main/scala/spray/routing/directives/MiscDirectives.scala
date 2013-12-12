@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,14 +20,13 @@ package directives
 import scala.reflect.{ classTag, ClassTag }
 import shapeless._
 import spray.http._
-import spray.util._
+import spray.http.parser.CharPredicate
 import HttpHeaders._
 import MediaTypes._
 
 trait MiscDirectives {
   import BasicDirectives._
   import RouteDirectives._
-  import HeaderDirectives._
 
   /**
    * Returns a Directive which checks the given condition before passing on the [[spray.routing.RequestContext]] to
@@ -42,26 +41,28 @@ trait MiscDirectives {
    * Directive extracting the IP of the client from either the X-Forwarded-For, Remote-Address or X-Real-IP header
    * (in that order of priority).
    */
-  lazy val clientIP: Directive1[HttpIp] =
-    (headerValuePF { case `X-Forwarded-For`(ips) if ips.flatten.nonEmpty ⇒ ips.flatten.head }) |
-      (headerValuePF { case `Remote-Address`(ip) ⇒ ip }) |
-      (headerValuePF { case h if h.is("x-real-ip") ⇒ h.value })
+  def clientIP: Directive1[RemoteAddress] = MiscDirectives._clientIP
 
   /**
    * Wraps the inner Route with JSONP support. If a query parameter with the given name is present in the request and
    * the inner Route returns content with content-type `application/json` the response content is wrapped with a call
-   * to a Javascript function having the name of query parameters value. Additionally the content-type is changed from
-   * `application/json` to `application/javascript` in these cases.
+   * to a Javascript function having the name of query parameters value. The name of this function is validated to
+   * prevent XSS vulnerabilities. Only alphanumeric, underscore (_), dollar ($) and dot (.) characters are allowed.
+   * Additionally the content-type is changed from `application/json` to `application/javascript` in these cases.
    */
   def jsonpWithParameter(parameterName: String): Directive0 = {
+    import MiscDirectives._
     import ParameterDirectives._
     parameter(parameterName?).flatMap {
-      case Some(wrapper) ⇒ mapHttpResponseEntity {
-        case HttpBody(ct @ ContentType(`application/json`, _), buffer) ⇒ HttpEntity(
-          contentType = ct.withMediaType(`application/javascript`),
-          string = wrapper + '(' + buffer.asString(ct.charset.nioCharset) + ')')
-        case entity ⇒ entity
-      }
+      case Some(wrapper) ⇒
+        if (validJsonpChars.matchAll(wrapper)) {
+          mapHttpResponseEntity {
+            case HttpEntity.NonEmpty(ct @ ContentType(`application/json`, _), data) ⇒ HttpEntity(
+              contentType = ct.withMediaType(`application/javascript`),
+              string = wrapper + '(' + data.asString(ct.charset.nioCharset) + ')')
+            case entity ⇒ entity
+          }
+        } else reject(MalformedQueryParamRejection(parameterName, "Invalid JSONP callback identifier"))
       case _ ⇒ noop
     }
   }
@@ -92,15 +93,13 @@ trait MiscDirectives {
   /**
    * Rejects the request if its entity is not empty.
    */
-  def requestEntityEmpty: Directive0 =
-    extract(_.request.entity.isEmpty).flatMap(if (_) pass else reject)
+  def requestEntityEmpty: Directive0 = MiscDirectives._requestEntityEmpty
 
   /**
    * Rejects empty requests with a RequestEntityExpectedRejection.
    * Non-empty requests are passed on unchanged to the inner route.
    */
-  def requestEntityPresent: Directive0 =
-    extract(_.request.entity.isEmpty).flatMap(if (_) reject else pass)
+  def requestEntityPresent: Directive0 = MiscDirectives._requestEntityPresent
 
   /**
    * Transforms the unmatchedPath of the RequestContext using the given function.
@@ -111,18 +110,57 @@ trait MiscDirectives {
   /**
    * Extracts the unmatched path from the RequestContext.
    */
-  def unmatchedPath: Directive1[Uri.Path] =
-    extract(_.unmatchedPath)
+  def unmatchedPath: Directive1[Uri.Path] = MiscDirectives._unmatchedPath
 
   /**
    * Converts responses with an empty entity into (empty) rejections.
    * This way you can, for example, have the marshalling of a ''None'' option be treated as if the request could
    * not be matched.
    */
-  def rejectEmptyResponse: Directive0 = mapRouteResponse {
-    case HttpMessagePartWrapper(HttpResponse(_, EmptyEntity, _, _), _) ⇒ Rejected(Nil)
-    case x ⇒ x
-  }
+  def rejectEmptyResponse: Directive0 = MiscDirectives._rejectEmptyResponse
+
+  /**
+   * Extracts the complete request.
+   */
+  def requestInstance: Directive1[HttpRequest] = MiscDirectives._requestInstance
+
+  /**
+   * Extracts the complete request URI.
+   */
+  def requestUri: Directive1[Uri] = MiscDirectives._requestUri
 }
 
-object MiscDirectives extends MiscDirectives
+object MiscDirectives extends MiscDirectives {
+  import BasicDirectives._
+  import HeaderDirectives._
+  import RouteDirectives._
+  import CharPredicate._
+
+  private val validJsonpChars = AlphaNum ++ '.' ++ '_' ++ '$'
+
+  private val _clientIP: Directive1[RemoteAddress] =
+    headerValuePF { case `X-Forwarded-For`(Seq(address, _*)) ⇒ address } |
+      headerValuePF { case `Remote-Address`(address) ⇒ address } |
+      headerValuePF { case h if h.is("x-real-ip") ⇒ RemoteAddress(h.value) }
+
+  private val _requestEntityEmpty: Directive0 =
+    extract(_.request.entity.isEmpty).flatMap(if (_) pass else reject)
+
+  private val _requestEntityPresent: Directive0 =
+    extract(_.request.entity.isEmpty).flatMap(if (_) reject else pass)
+
+  private val _unmatchedPath: Directive1[Uri.Path] =
+    extract(_.unmatchedPath)
+
+  private val _rejectEmptyResponse: Directive0 =
+    mapRouteResponse {
+      case HttpMessagePartWrapper(HttpResponse(_, HttpEntity.Empty, _, _), _) ⇒ Rejected(Nil)
+      case x ⇒ x
+    }
+
+  private val _requestInstance: Directive1[HttpRequest] =
+    extract(_.request)
+
+  private val _requestUri: Directive1[Uri] =
+    extract(_.request.uri)
+}

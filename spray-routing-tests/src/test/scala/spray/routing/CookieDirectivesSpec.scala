@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,7 @@ class CookieDirectivesSpec extends RoutingSpec {
     "extract the respectively named cookie" in {
       Get() ~> addHeader(Cookie(HttpCookie("fancy", "pants"))) ~> {
         cookie("fancy") { echoComplete }
-      } ~> check { entityAs[String] === "fancy=pants" }
+      } ~> check { responseAs[String] === "fancy=pants" }
     }
     "reject the request if the cookie is not present" in {
       Get() ~> {
@@ -44,7 +44,7 @@ class CookieDirectivesSpec extends RoutingSpec {
       Get() ~> {
         deleteCookie("myCookie", "test.com") { completeOk }
       } ~> check {
-        response.toString === "HttpResponse(200 OK,EmptyEntity,List(Set-Cookie: myCookie=deleted; " +
+        response.toString === "HttpResponse(200 OK,Empty,List(Set-Cookie: myCookie=deleted; " +
           "Expires=Wed, 01 Jan 1800 00:00:00 GMT; Domain=test.com),HTTP/1.1)"
       }
     }
@@ -53,7 +53,7 @@ class CookieDirectivesSpec extends RoutingSpec {
       Get() ~> {
         deleteCookie(HttpCookie("myCookie", "test.com"), HttpCookie("myCookie2", "foobar.com")) { completeOk }
       } ~> check {
-        response.toString === "HttpResponse(200 OK,EmptyEntity,List(" +
+        response.toString === "HttpResponse(200 OK,Empty,List(" +
           "Set-Cookie: myCookie=deleted; Expires=Wed, 01 Jan 1800 00:00:00 GMT, " +
           "Set-Cookie: myCookie2=deleted; Expires=Wed, 01 Jan 1800 00:00:00 GMT" +
           "),HTTP/1.1)"
@@ -65,10 +65,10 @@ class CookieDirectivesSpec extends RoutingSpec {
     "produce a `Some(cookie)` extraction if the cookie is present" in {
       Get() ~> Cookie(HttpCookie("abc", "123")) ~> {
         optionalCookie("abc") { echoComplete }
-      } ~> check { entityAs[String] === "Some(abc=123)" }
+      } ~> check { responseAs[String] === "Some(abc=123)" }
     }
     "produce a `None` extraction if the cookie is not present" in {
-      Get() ~> optionalCookie("abc") { echoComplete } ~> check { entityAs[String] === "None" }
+      Get() ~> optionalCookie("abc") { echoComplete } ~> check { responseAs[String] === "None" }
     }
     "let rejections from its inner route pass through" in {
       Get() ~> {
@@ -84,7 +84,7 @@ class CookieDirectivesSpec extends RoutingSpec {
       Get() ~> {
         setCookie(HttpCookie("myCookie", "test.com")) { completeOk }
       } ~> check {
-        response.toString === "HttpResponse(200 OK,EmptyEntity,List(Set-Cookie: myCookie=test.com),HTTP/1.1)"
+        response.toString === "HttpResponse(200 OK,Empty,List(Set-Cookie: myCookie=test.com),HTTP/1.1)"
       }
     }
 
@@ -92,7 +92,7 @@ class CookieDirectivesSpec extends RoutingSpec {
       Get() ~> {
         setCookie(HttpCookie("myCookie", "test.com"), HttpCookie("myCookie2", "foobar.com")) { completeOk }
       } ~> check {
-        response.toString === "HttpResponse(200 OK,EmptyEntity,List(" +
+        response.toString === "HttpResponse(200 OK,Empty,List(" +
           "Set-Cookie: myCookie=test.com, " +
           "Set-Cookie: myCookie2=foobar.com" +
           "),HTTP/1.1)"

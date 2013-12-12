@@ -11,17 +11,15 @@ object Main extends App with SimpleRoutingApp {
 
   startServer("localhost", port = 8080) {
     get {
-      path("") {
+      pathSingleSlash {
         redirect("/hello", StatusCodes.Found)
       } ~
       path("hello") {
-        respondWithMediaType(`text/html`) { // XML is marshalled to `text/xml` by default, so we simply override here
-          complete {
-            <html>
-              <h1>Say hello to <em>spray</em> on <em>spray-can</em>!</h1>
-              <p>(<a href="/stop?method=post">stop server</a>)</p>
-            </html>
-          }
+        complete {
+          <html>
+            <h1>Say hello to <em>spray</em> on <em>spray-can</em>!</h1>
+            <p>(<a href="/stop?method=post">stop server</a>)</p>
+          </html>
         }
       }
     } ~

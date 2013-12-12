@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
- * Based on code copyright (C) 2010-2011 by the BlueEyes Web Framework Team (http://github.com/jdegoes/blueeyes)
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +31,8 @@ case class ProductVersion(product: String = "", version: String = "", comment: S
 }
 
 object ProductVersion {
+  implicit val productsRenderer: Renderer[Seq[ProductVersion]] = Renderer.seqRenderer[ProductVersion](separator = " ")
+
   def parseMultiple(string: String): Seq[ProductVersion] =
     parser.HttpParser.parse(HttpParser.ProductVersionComments, string) match {
       case Right(x)   ⇒ x

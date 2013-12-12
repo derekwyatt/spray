@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,10 @@
 
 package spray.http
 
-import java.nio.charset.Charset
 import scala.annotation.tailrec
 import scala.reflect.{ classTag, ClassTag }
 import HttpHeaders._
 import HttpCharsets._
-import java.util
 
 sealed trait HttpMessagePartWrapper {
   def messagePart: HttpMessagePart
@@ -64,6 +62,8 @@ object HttpResponsePart {
 
 sealed trait HttpMessageStart extends HttpMessagePart {
   def message: HttpMessage
+
+  def mapHeaders(f: List[HttpHeader] ⇒ List[HttpHeader]): HttpMessageStart
 }
 
 object HttpMessageStart {
@@ -84,9 +84,21 @@ sealed abstract class HttpMessage extends HttpMessageStart with HttpMessageEnd {
   def protocol: HttpProtocol
 
   def withHeaders(headers: HttpHeader*): Self = withHeaders(headers.toList)
+  def withDefaultHeaders(defaultHeaders: List[HttpHeader]) = {
+    @tailrec def patch(remaining: List[HttpHeader], result: List[HttpHeader] = headers): List[HttpHeader] =
+      remaining match {
+        case h :: rest if result.exists(_.is(h.lowercaseName)) ⇒ patch(rest, result)
+        case h :: rest ⇒ patch(rest, h :: result)
+        case Nil ⇒ result
+      }
+    withHeaders(patch(defaultHeaders))
+  }
   def withHeaders(headers: List[HttpHeader]): Self
   def withEntity(entity: HttpEntity): Self
   def withHeadersAndEntity(headers: List[HttpHeader], entity: HttpEntity): Self
+
+  /** Returns the start part for this message */
+  def chunkedMessageStart: HttpMessageStart
 
   def mapHeaders(f: List[HttpHeader] ⇒ List[HttpHeader]): Self = withHeaders(f(headers))
   def mapEntity(f: HttpEntity ⇒ HttpEntity): Self = withEntity(f(entity))
@@ -107,6 +119,26 @@ sealed abstract class HttpMessage extends HttpMessageStart with HttpMessageEnd {
       else if (erasure.isInstance(headers.head)) Some(headers.head.asInstanceOf[T]) else next(headers.tail)
     next(headers)
   }
+
+  def connectionCloseExpected: Boolean = HttpMessage.connectionCloseExpected(protocol, header[Connection])
+
+  /** Returns the message as if it was sent in chunks */
+  def asPartStream(maxChunkSize: Long = Long.MaxValue): Stream[HttpMessagePart] =
+    entity match {
+      case HttpEntity.Empty ⇒ Stream(chunkedMessageStart, ChunkedMessageEnd)
+      case HttpEntity.NonEmpty(ct, data) ⇒
+        val start = withHeadersAndEntity(`Content-Type`(ct) :: headers, HttpEntity.Empty).chunkedMessageStart
+        val chunks: Stream[HttpMessagePart] = data.toChunkStream(maxChunkSize).map(MessageChunk(_))
+        start #:: chunks append Stream(ChunkedMessageEnd)
+    }
+}
+
+object HttpMessage {
+  private[spray] def connectionCloseExpected(protocol: HttpProtocol, connectionHeader: Option[Connection]): Boolean =
+    protocol match {
+      case HttpProtocols.`HTTP/1.1` ⇒ connectionHeader.isDefined && connectionHeader.get.hasClose
+      case HttpProtocols.`HTTP/1.0` ⇒ connectionHeader.isEmpty || !connectionHeader.get.hasKeepAlive
+    }
 }
 
 /**
@@ -115,7 +147,7 @@ sealed abstract class HttpMessage extends HttpMessageStart with HttpMessageEnd {
 case class HttpRequest(method: HttpMethod = HttpMethods.GET,
                        uri: Uri = Uri./,
                        headers: List[HttpHeader] = Nil,
-                       entity: HttpEntity = EmptyEntity,
+                       entity: HttpEntity = HttpEntity.Empty,
                        protocol: HttpProtocol = HttpProtocols.`HTTP/1.1`) extends HttpMessage with HttpRequestPart {
   require(!uri.isEmpty, "An HttpRequest must not have an empty Uri")
 
@@ -124,107 +156,152 @@ case class HttpRequest(method: HttpMethod = HttpMethods.GET,
   def isRequest = true
   def isResponse = false
 
-  def withEffectiveUri(securedConnection: Boolean): HttpRequest =
-    if (uri.isAbsolute) this
-    else header[Host] match {
-      case None                   ⇒ sys.error("Cannot establish effective request URI, request has a relative URI and is missing a `Host` header")
-      case Some(Host("", _))      ⇒ sys.error("Cannot establish effective request URI, request has a relative URI and an empty `Host` header")
-      case Some(Host(host, port)) ⇒ copy(uri = uri.toEffectiveHttpRequestUri(securedConnection, Uri.Host(host), port))
-    }
-
-  def acceptedMediaRanges: List[MediaRange] = {
-    // TODO: sort by preference
-    for (Accept(mediaRanges) ← headers; range ← mediaRanges) yield range
+  def withEffectiveUri(securedConnection: Boolean, defaultHostHeader: Host = Host.empty): HttpRequest = {
+    val hostHeader = header[Host]
+    if (uri.isRelative) {
+      def fail(detail: String) =
+        sys.error("Cannot establish effective request URI of " + this + ", request has a relative URI and " + detail)
+      val Host(host, port) = hostHeader match {
+        case None                 ⇒ if (defaultHostHeader.isEmpty) fail("is missing a `Host` header") else defaultHostHeader
+        case Some(x) if x.isEmpty ⇒ if (defaultHostHeader.isEmpty) fail("an empty `Host` header") else defaultHostHeader
+        case Some(x)              ⇒ x
+      }
+      copy(uri = uri.toEffectiveHttpRequestUri(Uri.Host(host), port, securedConnection))
+    } else // http://tools.ietf.org/html/draft-ietf-httpbis-p1-messaging-22#section-5.4
+    if (hostHeader.isEmpty || uri.authority.isEmpty && hostHeader.get.isEmpty ||
+      hostHeader.get.host.equalsIgnoreCase(uri.authority.host.address) && hostHeader.get.port == uri.authority.port) this
+    else sys.error("'Host' header value doesn't match request target authority")
   }
 
-  def acceptedCharsetRanges: List[HttpCharsetRange] = {
-    // TODO: sort by preference
-    for (`Accept-Charset`(charsetRanges) ← headers; range ← charsetRanges) yield range
-  }
+  def acceptedMediaRanges: List[MediaRange] =
+    (for {
+      Accept(mediaRanges) ← headers
+      range ← mediaRanges
+    } yield range).sortBy(-_.qValue)
 
-  def acceptedEncodingRanges: List[HttpEncodingRange] = {
-    // TODO: sort by preference
-    for (`Accept-Encoding`(encodingRanges) ← headers; range ← encodingRanges) yield range
-  }
+  def acceptedCharsetRanges: List[HttpCharsetRange] =
+    (for {
+      `Accept-Charset`(charsetRanges) ← headers
+      range ← charsetRanges
+    } yield range).sortBy(-_.qValue)
+
+  def acceptedEncodingRanges: List[HttpEncodingRange] =
+    (for {
+      `Accept-Encoding`(encodingRanges) ← headers
+      range ← encodingRanges
+    } yield range).sortBy(-_.qValue)
 
   def cookies: List[HttpCookie] = for (`Cookie`(cookies) ← headers; cookie ← cookies) yield cookie
 
   /**
    * Determines whether the given media-type is accepted by the client.
    */
-  def isMediaTypeAccepted(mediaType: MediaType) = {
-    // according to the HTTP spec a client has to accept all mime types if no Accept header is sent with the request
-    // http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.1
-    val ranges = acceptedMediaRanges
-    ranges.isEmpty || ranges.exists(_.matches(mediaType))
-  }
+  def isMediaTypeAccepted(mediaType: MediaType, ranges: List[MediaRange] = acceptedMediaRanges): Boolean =
+    qValueForMediaType(mediaType, ranges) > 0f
+
+  /**
+   * Returns the q-value that the client (implicitly or explicitly) attaches to the given media-type.
+   */
+  def qValueForMediaType(mediaType: MediaType, ranges: List[MediaRange] = acceptedMediaRanges): Float =
+    ranges match {
+      case Nil ⇒ 1.0f // http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.1
+      case x ⇒
+        @tailrec def rec(r: List[MediaRange] = x): Float = r match {
+          case Nil          ⇒ 0f
+          case head :: tail ⇒ if (head.matches(mediaType)) head.qValue else rec(tail)
+        }
+        rec()
+    }
 
   /**
    * Determines whether the given charset is accepted by the client.
    */
-  def isCharsetAccepted(charset: HttpCharset) = {
-    // according to the HTTP spec a client has to accept all charsets if no Accept-Charset header is sent with the request
-    // http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.2
-    val ranges = acceptedCharsetRanges
-    ranges.isEmpty || ranges.exists(_.matches(charset))
-  }
+  def isCharsetAccepted(charset: HttpCharset, ranges: List[HttpCharsetRange] = acceptedCharsetRanges): Boolean =
+    qValueForCharset(charset, ranges) > 0f
+
+  /**
+   * Returns the q-value that the client (implicitly or explicitly) attaches to the given charset.
+   */
+  def qValueForCharset(charset: HttpCharset, ranges: List[HttpCharsetRange] = acceptedCharsetRanges): Float =
+    ranges match {
+      case Nil ⇒ 1.0f // http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.2
+      case x ⇒
+        @tailrec def rec(r: List[HttpCharsetRange] = x): Float = r match {
+          case Nil          ⇒ if (charset == `ISO-8859-1`) 1f else 0f
+          case head :: tail ⇒ if (head.matches(charset)) head.qValue else rec(tail)
+        }
+        rec()
+    }
 
   /**
    * Determines whether the given encoding is accepted by the client.
    */
-  def isEncodingAccepted(encoding: HttpEncoding) = {
-    // according to the HTTP spec the server MAY assume that the client will accept any content coding if no
-    // Accept-Encoding header is sent with the request (http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.3)
-    // this is what we do here
-    val ranges = acceptedEncodingRanges
-    ranges.isEmpty || ranges.exists(_.matches(encoding))
-  }
+  def isEncodingAccepted(encoding: HttpEncoding, ranges: List[HttpEncodingRange] = acceptedEncodingRanges): Boolean =
+    qValueForEncoding(encoding, ranges) > 0f
 
   /**
-   * Determines whether the given content-type is accepted by the client.
+   * Returns the q-value that the client (implicitly or explicitly) attaches to the given encoding.
    */
-  def isContentTypeAccepted(ct: ContentType) = {
-    isMediaTypeAccepted(ct.mediaType) && (ct.noCharsetDefined || isCharsetAccepted(ct.definedCharset.get))
-  }
+  def qValueForEncoding(encoding: HttpEncoding, ranges: List[HttpEncodingRange] = acceptedEncodingRanges): Float =
+    ranges match {
+      case Nil ⇒ 1.0f // http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.3
+      case x ⇒
+        @tailrec def rec(r: List[HttpEncodingRange] = x): Float = r match {
+          case Nil          ⇒ 0f
+          case head :: tail ⇒ if (head.matches(encoding)) head.qValue else rec(tail)
+        }
+        rec()
+    }
 
   /**
-   * Determines whether the given content-type is accepted by the client.
-   * If the given ContentType does not define a charset an accepted charset is selected, i.e. the method guarantees
+   * Determines whether one of the given content-types is accepted by the client.
+   * If a given ContentType does not define a charset an accepted charset is selected, i.e. the method guarantees
    * that, if a ContentType instance is returned within the option, it will contain a defined charset.
    */
-  def acceptableContentType(contentType: ContentType): Option[ContentType] = {
-    if (isContentTypeAccepted(contentType)) Some {
-      if (contentType.isCharsetDefined) contentType
-      else ContentType(contentType.mediaType, acceptedCharset)
-    }
-    else None
-  }
+  def acceptableContentType(contentTypes: Seq[ContentType]): Option[ContentType] = {
+    val mediaRanges = acceptedMediaRanges // cache for performance
+    val charsetRanges = acceptedCharsetRanges // cache for performance
 
-  /**
-   * Returns a charset that is accepted by the client.
-   * Default is UTF-8 in that, if UTF-8 is accepted, it is used.
-   */
-  def acceptedCharset: HttpCharset = {
-    if (isCharsetAccepted(`UTF-8`)) `UTF-8`
-    else acceptedCharsetRanges match {
-      case (cs: HttpCharset) :: _ ⇒ cs
-      case _                      ⇒ throw new IllegalStateException // a HttpCharsetRange that is not `*` ?
+    @tailrec def findBest(ix: Int = 0, result: ContentType = null, maxQ: Float = 0f): Option[ContentType] =
+      if (ix < contentTypes.size) {
+        val ct = contentTypes(ix)
+        val q = qValueForMediaType(ct.mediaType, mediaRanges)
+        if (q > maxQ && (ct.noCharsetDefined || isCharsetAccepted(ct.charset, charsetRanges))) findBest(ix + 1, ct, q)
+        else findBest(ix + 1, result, maxQ)
+      } else Option(result)
+
+    findBest() match {
+      case x @ Some(ct) if ct.isCharsetDefined ⇒ x
+      case Some(ct) ⇒
+        // logic for choosing the charset adapted from http://www.w3.org/Protocols/rfc2616/rfc2616-sec14.html#sec14.2
+        def withCharset(cs: HttpCharset) = Some(ContentType(ct.mediaType, cs))
+        if (qValueForCharset(`UTF-8`, charsetRanges) == 1f) withCharset(`UTF-8`)
+        else charsetRanges match { // ranges are sorted by descending q-value
+          case (HttpCharsetRange.One(cs, qValue)) :: _ ⇒
+            if (qValue == 1f) withCharset(cs)
+            else if (qValueForCharset(`ISO-8859-1`, charsetRanges) == 1f) withCharset(`ISO-8859-1`)
+            else if (qValue > 0f) withCharset(cs)
+            else None
+          case _ ⇒ None
+        }
+      case None ⇒ None
     }
   }
 
   def canBeRetried = method.isIdempotent
-
   def withHeaders(headers: List[HttpHeader]) = if (headers eq this.headers) this else copy(headers = headers)
   def withEntity(entity: HttpEntity) = if (entity eq this.entity) this else copy(entity = entity)
   def withHeadersAndEntity(headers: List[HttpHeader], entity: HttpEntity) =
     if ((headers eq this.headers) && (entity eq this.entity)) this else copy(headers = headers, entity = entity)
+
+  def chunkedMessageStart: ChunkedRequestStart = ChunkedRequestStart(this)
 }
 
 /**
  * Immutable HTTP response model.
  */
 case class HttpResponse(status: StatusCode = StatusCodes.OK,
-                        entity: HttpEntity = EmptyEntity,
+                        entity: HttpEntity = HttpEntity.Empty,
                         headers: List[HttpHeader] = Nil,
                         protocol: HttpProtocol = HttpProtocols.`HTTP/1.1`) extends HttpMessage with HttpResponsePart {
   type Self = HttpResponse
@@ -233,31 +310,18 @@ case class HttpResponse(status: StatusCode = StatusCodes.OK,
   def isRequest = false
   def isResponse = true
 
-  def withHeaders(headers: List[HttpHeader]) = copy(headers = headers)
-  def withEntity(entity: HttpEntity) = copy(entity = entity)
-  def withHeadersAndEntity(headers: List[HttpHeader], entity: HttpEntity) = copy(headers = headers, entity = entity)
+  def withHeaders(headers: List[HttpHeader]) = if (headers eq this.headers) this else copy(headers = headers)
+  def withEntity(entity: HttpEntity) = if (entity eq this.entity) this else copy(entity = entity)
+  def withHeadersAndEntity(headers: List[HttpHeader], entity: HttpEntity) =
+    if ((headers eq this.headers) && (entity eq this.entity)) this else copy(headers = headers, entity = entity)
 
-  def connectionCloseExpected: Boolean = protocol match {
-    case HttpProtocols.`HTTP/1.0` ⇒ headers.forall { case x: Connection if x.hasKeepAlive ⇒ false; case _ ⇒ true }
-    case HttpProtocols.`HTTP/1.1` ⇒ headers.exists { case x: Connection if x.hasClose ⇒ true; case _ ⇒ false }
-  }
+  def chunkedMessageStart: ChunkedResponseStart = ChunkedResponseStart(this)
 }
 
 /**
  * Instance of this class represent the individual chunks of a chunked HTTP message (request or response).
  */
-case class MessageChunk(body: Array[Byte], extension: String) extends HttpRequestPart with HttpResponsePart {
-  require(body.length > 0, "MessageChunk must not have empty body")
-  def bodyAsString: String = bodyAsString(HttpCharsets.`ISO-8859-1`.nioCharset)
-  def bodyAsString(charset: HttpCharset): String = bodyAsString(charset.nioCharset)
-  def bodyAsString(charset: Charset): String = if (body.isEmpty) "" else new String(body, charset)
-  def bodyAsString(charset: String): String = if (body.isEmpty) "" else new String(body, charset)
-  override def hashCode = extension.## * 31 + util.Arrays.hashCode(body)
-  override def equals(obj: Any) = obj match {
-    case x: MessageChunk ⇒ (this eq x) || extension == x.extension && util.Arrays.equals(body, x.body)
-    case _               ⇒ false
-  }
-}
+case class MessageChunk(data: HttpData.NonEmpty, extension: String) extends HttpRequestPart with HttpResponsePart
 
 object MessageChunk {
   import HttpCharsets._
@@ -266,19 +330,32 @@ object MessageChunk {
   def apply(body: String, charset: HttpCharset): MessageChunk =
     apply(body, charset, "")
   def apply(body: String, extension: String): MessageChunk =
-    apply(body, `ISO-8859-1`, extension)
+    apply(body, `UTF-8`, extension)
   def apply(body: String, charset: HttpCharset, extension: String): MessageChunk =
-    apply(body.getBytes(charset.nioCharset), extension)
-  def apply(body: Array[Byte]): MessageChunk =
-    apply(body, "")
+    apply(HttpData(body, charset), extension)
+  def apply(bytes: Array[Byte]): MessageChunk =
+    apply(HttpData(bytes))
+  def apply(data: HttpData): MessageChunk =
+    apply(data, "")
+  def apply(data: HttpData, extension: String): MessageChunk =
+    data match {
+      case x: HttpData.NonEmpty ⇒ new MessageChunk(x, extension)
+      case _                    ⇒ throw new IllegalArgumentException("Cannot create MessageChunk with empty data")
+    }
 }
 
 case class ChunkedRequestStart(request: HttpRequest) extends HttpMessageStart with HttpRequestPart {
   def message = request
+
+  def mapHeaders(f: List[HttpHeader] ⇒ List[HttpHeader]): ChunkedRequestStart =
+    ChunkedRequestStart(request mapHeaders f)
 }
 
 case class ChunkedResponseStart(response: HttpResponse) extends HttpMessageStart with HttpResponsePart {
   def message = response
+
+  def mapHeaders(f: List[HttpHeader] ⇒ List[HttpHeader]): ChunkedResponseStart =
+    ChunkedResponseStart(response mapHeaders f)
 }
 
 object ChunkedMessageEnd extends ChunkedMessageEnd("", Nil)

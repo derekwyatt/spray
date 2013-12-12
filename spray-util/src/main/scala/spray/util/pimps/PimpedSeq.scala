@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ abstract class PimpedSeq[+A] {
 class PimpedLinearSeq[+A](underlying: LinearSeq[A]) extends PimpedSeq[A] {
   def mapFind[B](f: A ⇒ Option[B]): Option[B] = {
     @tailrec def mapFind(seq: LinearSeq[A]): Option[B] =
-      if (!seq.isEmpty) {
+      if (seq.nonEmpty) {
         val x = f(seq.head)
         if (x.isEmpty) mapFind(seq.tail) else x
       } else None

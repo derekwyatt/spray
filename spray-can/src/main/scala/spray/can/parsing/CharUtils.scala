@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,12 +17,12 @@
 package spray.can.parsing
 
 import scala.collection.immutable.NumericRange
-import akka.util.CompactByteString
+import akka.util.ByteString
 import scala.annotation.tailrec
 import java.lang.{ StringBuilder ⇒ JStringBuilder }
 
 // TODO: replace with spray.http.parser.CharMask
-private[parsing] object CharUtils {
+private object CharUtils {
   // compile time constants
   private final val LOWER_ALPHA = 0x01
   private final val UPPER_ALPHA = 0x02
@@ -33,6 +33,7 @@ private[parsing] object CharUtils {
   private final val TOKEN_SPECIALS = 0x10
   private final val TOKEN = ALPHA | DIGIT | TOKEN_SPECIALS
   private final val WSP = 0x20
+  private final val NEWLINE = 0x40
 
   private[this] val props = new Array[Byte](128)
 
@@ -48,10 +49,12 @@ private[parsing] object CharUtils {
   mark(HEX_LETTER, 'A' to 'F')
   mark(TOKEN_SPECIALS, '!', '#', '$', '%', '&', '\'', '*', '+', '-', '.', '^', '_', '`', '|', '~')
   mark(WSP, ' ', '\t')
+  mark(NEWLINE, '\r', '\t')
 
   def isTokenChar(c: Char) = is(c, TOKEN)
   def isDigit(c: Char) = is(c, DIGIT)
   def isWhitespace(c: Char) = is(c, WSP)
+  def isWhitespaceOrNewline(c: Char) = is(c, WSP | NEWLINE)
   def isHexDigit(c: Char) = is(c, HEX_DIGIT)
 
   def hexValue(c: Char): Int = (c & 0x1f) + ((c >> 6) * 0x19) - 0x10
@@ -66,10 +69,10 @@ private[parsing] object CharUtils {
     case x                              ⇒ x.toString
   }
 
-  def byteChar(input: CompactByteString, ix: Int): Char =
+  def byteChar(input: ByteString, ix: Int): Char =
     if (ix < input.length) input(ix).toChar else throw NotEnoughDataException
 
-  def asciiString(input: CompactByteString, start: Int, end: Int): String = {
+  def asciiString(input: ByteString, start: Int, end: Int): String = {
     @tailrec def build(ix: Int = start, sb: JStringBuilder = new JStringBuilder(end - start)): String =
       if (ix == end) sb.toString else build(ix + 1, sb.append(input(ix).toChar))
     if (start == end) "" else build()

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,46 +36,43 @@ trait MultipartMarshallers {
     Base64.custom.encodeToString(array, false)
   }
 
-  implicit def multipartContentMarshaller =
-    Marshaller.of[MultipartContent](new `multipart/mixed`(randomBoundary)) { (value, contentType, ctx) ⇒
-      val r = new ByteArrayRendering(512)
-      val boundary = contentType.mediaType.asInstanceOf[MultipartMediaType].boundary
+  implicit def multipartContentMarshaller = {
+    val boundary = randomBoundary
+    Marshaller.of[MultipartContent](`multipart/mixed` withBoundary boundary) { (value, contentType, ctx) ⇒
       if (!value.parts.isEmpty) {
+        val r = new HttpDataRendering(rawBytesSizeHint = 512)
         value.parts.foreach { part ⇒
           r ~~ '-' ~~ '-' ~~ boundary ~~ CrLf
           part.headers.foreach { header ⇒ if (header.isNot("content-type")) r ~~ header ~~ CrLf }
           part.entity match {
-            case EmptyEntity       ⇒
-            case HttpBody(ct, buf) ⇒ if (buf.length > 0) r ~~ `Content-Type` ~~ ct ~~ CrLf ~~ CrLf ~~ buf ~~ CrLf
+            case HttpEntity.Empty              ⇒
+            case HttpEntity.NonEmpty(ct, data) ⇒ r ~~ `Content-Type` ~~ ct ~~ CrLf ~~ CrLf ~~ data ~~ CrLf
           }
         }
         r ~~ '-' ~~ '-' ~~ boundary ~~ '-' ~~ '-'
         ctx.marshalTo(HttpEntity(contentType, r.get))
-      } else ctx.marshalTo(EmptyEntity)
+      } else ctx.marshalTo(HttpData.Empty)
     }
+  }
 
   implicit def multipartFormDataMarshaller(implicit mcm: Marshaller[MultipartContent]) =
     Marshaller[MultipartFormData] { (value, ctx) ⇒
-      ctx.tryAccept(`multipart/form-data`) match {
+      ctx.tryAccept(`multipart/form-data` :: Nil) match {
         case None ⇒ ctx.rejectMarshalling(Seq(`multipart/form-data`))
         case _ ⇒ mcm(
-          value = MultipartContent {
-            value.fields.map {
-              case (name, part) ⇒ part.copy(
-                headers = `Content-Disposition`("form-data", Map("name" -> name)) :: part.headers)
-            }(collection.breakOut)
-          },
+          value = MultipartContent(value.fields),
           ctx = new DelegatingMarshallingContext(ctx) {
             var boundary = ""
-            override def tryAccept(contentType: ContentType) = {
-              boundary = contentType.mediaType.asInstanceOf[MultipartMediaType].boundary
-              Some(contentType)
+            override def tryAccept(contentTypes: Seq[ContentType]) = {
+              boundary = contentTypes.head.mediaType.parameters("boundary")
+              contentTypes.headOption
             }
-            override def marshalTo(entity: HttpEntity): Unit = { ctx.marshalTo(overrideContentType(entity)) }
-            override def startChunkedMessage(entity: HttpEntity, sentAck: Option[Any])(implicit sender: ActorRef) =
-              ctx.startChunkedMessage(overrideContentType(entity), sentAck)
+            override def marshalTo(entity: HttpEntity, headers: HttpHeader*): Unit =
+              ctx.marshalTo(overrideContentType(entity), headers: _*)
+            override def startChunkedMessage(entity: HttpEntity, sentAck: Option[Any], headers: Seq[HttpHeader])(implicit sender: ActorRef) =
+              ctx.startChunkedMessage(overrideContentType(entity), sentAck, headers)
             def overrideContentType(entity: HttpEntity) =
-              entity.flatMap(body ⇒ HttpEntity(new `multipart/form-data`(boundary), body.buffer))
+              entity.flatMap(body ⇒ HttpEntity(`multipart/form-data` withBoundary boundary, body.data))
           })
       }
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,9 +24,9 @@ import spray.can.rendering.RequestPartRenderingContext
 import spray.can.Http
 import spray.http._
 import spray.io._
-import System.{ currentTimeMillis ⇒ now }
+import spray.util.Timestamp
 
-object ClientFrontend {
+private object ClientFrontend {
 
   def apply(initialRequestTimeout: Duration): PipelineStage = {
     new PipelineStage {
@@ -37,30 +37,33 @@ object ClientFrontend {
           var requestTimeout = initialRequestTimeout
           var closeCommanders = Set.empty[ActorRef]
 
+          def lastRequestComplete = openRequests.isEmpty || openRequests.last.state != AwaitingChunkEnd
+
           val commandPipeline: CPL = {
             case Http.MessageCommand(HttpMessagePartWrapper(x: HttpRequest, ack)) if closeCommanders.isEmpty ⇒
-              if (openRequests.isEmpty || openRequests.last.timestamp > 0) {
-                render(x, ack)
-                openRequests = openRequests enqueue new RequestRecord(x, context.sender, timestamp = now)
+              if (lastRequestComplete) {
+                render(x, x, ack)
+                val state = if (openRequests.isEmpty) AwaitingResponseStart(Timestamp.now) else AwaitingPreviousResponseEnd
+                openRequests = openRequests enqueue new RequestRecord(x, context.sender, state)
               } else log.warning("Received new HttpRequest before previous chunking request was " +
                 "finished, ignoring...")
 
             case Http.MessageCommand(HttpMessagePartWrapper(x: ChunkedRequestStart, ack)) if closeCommanders.isEmpty ⇒
-              if (openRequests.isEmpty || openRequests.last.timestamp > 0) {
-                render(x, ack)
-                openRequests = openRequests enqueue new RequestRecord(x, context.sender, timestamp = 0)
+              if (lastRequestComplete) {
+                render(x, x.request, ack)
+                openRequests = openRequests enqueue new RequestRecord(x, context.sender, state = AwaitingChunkEnd)
               } else log.warning("Received new ChunkedRequestStart before previous chunking " +
                 "request was finished, ignoring...")
 
             case Http.MessageCommand(HttpMessagePartWrapper(x: MessageChunk, ack)) if closeCommanders.isEmpty ⇒
-              if (!openRequests.isEmpty && openRequests.last.timestamp == 0) {
-                render(x, ack)
+              if (!lastRequestComplete) {
+                render(x, openRequests.last.request.message, ack)
               } else log.warning("Received MessageChunk outside of chunking request context, ignoring...")
 
             case Http.MessageCommand(HttpMessagePartWrapper(x: ChunkedMessageEnd, ack)) if closeCommanders.isEmpty ⇒
-              if (!openRequests.isEmpty && openRequests.last.timestamp == 0) {
-                render(x, ack)
-                openRequests.last.timestamp = now // only start timer once the request is completed
+              if (!lastRequestComplete) {
+                render(x, openRequests.last.request.message, ack)
+                openRequests.last.state = AwaitingResponseStart(Timestamp.now) // only start timer once the request is completed
               } else log.warning("Received ChunkedMessageEnd outside of chunking request " +
                 "context, ignoring...")
 
@@ -81,6 +84,12 @@ object ClientFrontend {
               if (!openRequests.isEmpty) {
                 val currentRecord = openRequests.head
                 openRequests = openRequests.tail
+                if (openRequests.nonEmpty)
+                  openRequests.head.state = openRequests.head.state match {
+                    case AwaitingChunkEnd            ⇒ AwaitingChunkEnd
+                    case AwaitingPreviousResponseEnd ⇒ AwaitingResponseStart(Timestamp.now)
+                    case _: AwaitingResponseStart    ⇒ throw new IllegalStateException
+                  }
                 dispatch(currentRecord.sender, x)
               } else {
                 log.warning("Received unmatched {}, closing connection due to protocol error", x)
@@ -89,6 +98,7 @@ object ClientFrontend {
 
             case Http.MessageEvent(x: HttpMessagePart) ⇒
               if (!openRequests.isEmpty) {
+                if (x.isInstanceOf[HttpMessageStart]) openRequests.head.state = AwaitingChunkEnd
                 dispatch(openRequests.head.sender, x)
               } else {
                 log.warning("Received unmatched {}, closing connection due to protocol error", x)
@@ -101,6 +111,7 @@ object ClientFrontend {
 
             case x: Tcp.ConnectionClosed ⇒
               openRequests.foldLeft(closeCommanders)(_ + _.sender) foreach (dispatch(_, x))
+              if (x eq Tcp.PeerClosed) commandPL(Tcp.Close)
               eventPL(x) // terminates the connection actor
 
             case TickGenerator.Tick ⇒
@@ -116,19 +127,20 @@ object ClientFrontend {
             case ev ⇒ eventPL(ev)
           }
 
-          def render(part: HttpRequestPart, ack: Option[Any]): Unit = {
+          def render(part: HttpRequestPart, message: HttpMessage, ack: Option[Any]): Unit = {
             val sentAck = ack match {
               case Some(x) ⇒ Pipeline.AckEvent(x)
               case None    ⇒ Tcp.NoAck(PartAndSender(part, context.sender))
             }
-            commandPL(RequestPartRenderingContext(part, sentAck))
+            commandPL(RequestPartRenderingContext(part, message.protocol, sentAck))
           }
 
           def checkForTimeout(): Unit =
             if (!openRequests.isEmpty && requestTimeout.isFinite) {
               val rec = openRequests.head
-              if (rec.timestamp > 0 && rec.timestamp + requestTimeout.toMillis < now) {
-                log.warning("Request timed out after {}, closing connection", requestTimeout)
+              if (rec.state.isOverdue(requestTimeout)) {
+                val r = rec.request.message.asInstanceOf[HttpRequest]
+                log.warning("{} request to '{}' timed out after {}, closing connection", r.method, r.uri, requestTimeout)
                 dispatch(rec.sender, Timedout(rec.request))
                 commandPL(Http.Close)
               }
@@ -140,7 +152,15 @@ object ClientFrontend {
     }
   }
 
-  private class RequestRecord(val request: HttpRequestPart with HttpMessageStart, val sender: ActorRef, var timestamp: Long)
+  private sealed abstract class RequestState {
+    def isOverdue(timeout: Duration): Boolean = false
+  }
+  private case object AwaitingChunkEnd extends RequestState
+  private case object AwaitingPreviousResponseEnd extends RequestState
+  private case class AwaitingResponseStart(timestamp: Timestamp) extends RequestState {
+    override def isOverdue(timeout: Duration) = (timestamp + timeout).isPast
+  }
+  private class RequestRecord(val request: HttpRequestPart with HttpMessageStart, val sender: ActorRef, var state: RequestState)
 
   private case class PartAndSender(part: HttpRequestPart, sender: ActorRef)
 }

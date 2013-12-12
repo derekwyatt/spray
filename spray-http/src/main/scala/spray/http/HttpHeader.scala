@@ -1,6 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
- * Based on code copyright (C) 2010-2011 by the BlueEyes Web Framework Team (http://github.com/jdegoes/blueeyes) 
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +18,7 @@ package spray.http
 
 import scala.annotation.{ implicitNotFound, tailrec }
 import java.net.InetSocketAddress
+import spray.util._
 
 abstract class HttpHeader extends ToStringRenderable {
   def name: String
@@ -48,11 +48,11 @@ object HttpHeaders {
       n.substring(n.indexOf('$') + 1, n.length - 1).replace("$minus", "-")
     }
     val lowercaseName = name.toLowerCase
-    private[this] val nameBytes = asciiBytes(name)
+    private[this] val nameBytes = name.getAsciiBytes
     def render[R <: Rendering](r: R): r.type = r ~~ nameBytes ~~ ':' ~~ ' '
   }
 
-  abstract class ModeledHeader extends HttpHeader with Serializable {
+  sealed abstract class ModeledHeader extends HttpHeader with Serializable {
     def name: String = companion.name
     def value: String = renderValue(new StringRendering).get
     def lowercaseName: String = companion.lowercaseName
@@ -99,6 +99,69 @@ object HttpHeaders {
     import `Accept-Language`.rangesRenderer
     def renderValue[R <: Rendering](r: R): r.type = r ~~ languages
     protected def companion = `Accept-Language`
+  }
+
+  object `Access-Control-Allow-Credentials` extends ModeledCompanion
+  case class `Access-Control-Allow-Credentials`(allow: Boolean) extends ModeledHeader {
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ allow.toString
+    protected def companion = `Access-Control-Allow-Credentials`
+  }
+  object `Access-Control-Allow-Headers` extends ModeledCompanion {
+    def apply(first: String, more: String*): `Access-Control-Allow-Headers` = apply(first +: more)
+    implicit val headersRenderer = Renderer.defaultSeqRenderer[String]
+  }
+  case class `Access-Control-Allow-Headers`(headers: Seq[String]) extends ModeledHeader {
+    import `Access-Control-Allow-Headers`.headersRenderer
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ headers
+    protected def companion = `Access-Control-Allow-Headers`
+  }
+
+  object `Access-Control-Allow-Methods` extends ModeledCompanion {
+    def apply(first: HttpMethod, more: HttpMethod*): `Access-Control-Allow-Methods` = apply(first +: more)
+    implicit val methodsRenderer = Renderer.defaultSeqRenderer[HttpMethod]
+  }
+  case class `Access-Control-Allow-Methods`(methods: Seq[HttpMethod]) extends ModeledHeader {
+    import `Access-Control-Allow-Methods`.methodsRenderer
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ methods
+    protected def companion = `Access-Control-Allow-Methods`
+  }
+  object `Access-Control-Allow-Origin` extends ModeledCompanion
+  case class `Access-Control-Allow-Origin`(allowedOrigins: AllowedOrigins) extends ModeledHeader {
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ allowedOrigins
+    protected def companion = `Access-Control-Allow-Origin`
+  }
+
+  object `Access-Control-Request-Headers` extends ModeledCompanion {
+    def apply(first: String, more: String*): `Access-Control-Request-Headers` = apply(first +: more)
+    implicit val headersRenderer = Renderer.defaultSeqRenderer[String]
+  }
+  case class `Access-Control-Request-Headers`(headers: Seq[String]) extends ModeledHeader {
+    import `Access-Control-Request-Headers`.headersRenderer
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ headers
+    protected def companion = `Access-Control-Request-Headers`
+  }
+
+  object `Access-Control-Request-Method` extends ModeledCompanion
+  case class `Access-Control-Request-Method`(method: HttpMethod) extends ModeledHeader {
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ method
+    protected def companion = `Access-Control-Request-Method`
+  }
+
+  object `Access-Control-Expose-Headers` extends ModeledCompanion {
+    def apply(first: String, more: String*): `Access-Control-Expose-Headers` = apply(first +: more)
+    implicit val headersRenderer = Renderer.defaultSeqRenderer[String]
+  }
+  case class `Access-Control-Expose-Headers`(headers: Seq[String]) extends ModeledHeader {
+    import `Access-Control-Expose-Headers`.headersRenderer
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ headers
+    protected def companion = `Access-Control-Expose-Headers`
+  }
+
+  object `Access-Control-Max-Age` extends ModeledCompanion
+  case class `Access-Control-Max-Age`(deltaSeconds: Long) extends ModeledHeader {
+    require(deltaSeconds >= 0, "deltaSeconds must be >= 0")
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ deltaSeconds
+    protected def companion = `Access-Control-Max-Age`
   }
 
   object Authorization extends ModeledCompanion
@@ -152,7 +215,7 @@ object HttpHeaders {
   }
 
   object `Content-Length` extends ModeledCompanion
-  case class `Content-Length`(length: Int)(implicit ev: ProtectedHeaderCreation.Enabled) extends ModeledHeader {
+  case class `Content-Length`(length: Long)(implicit ev: ProtectedHeaderCreation.Enabled) extends ModeledHeader {
     def renderValue[R <: Rendering](r: R): r.type = r ~~ length
     protected def companion = `Content-Length`
   }
@@ -165,7 +228,8 @@ object HttpHeaders {
 
   object Cookie extends ModeledCompanion {
     def apply(first: HttpCookie, more: HttpCookie*): `Cookie` = apply(first +: more)
-    implicit val cookiesRenderer = Renderer.seqRenderer[String, HttpCookie](separator = "; ") // cache
+    implicit val cookiesRenderer: Renderer[Seq[HttpCookie]] =
+      Renderer.seqRenderer(separator = "; ") // cache
   }
   case class Cookie(cookies: Seq[HttpCookie]) extends ModeledHeader {
     import Cookie.cookiesRenderer
@@ -192,9 +256,11 @@ object HttpHeaders {
 
   object Host extends ModeledCompanion {
     def apply(address: InetSocketAddress): Host = apply(address.getHostName, address.getPort)
+    val empty = Host("")
   }
   case class Host(host: String, port: Int = 0) extends ModeledHeader {
     require((port >> 16) == 0, "Illegal port: " + port)
+    def isEmpty = host.isEmpty
     def renderValue[R <: Rendering](r: R): r.type = if (port > 0) r ~~ host ~~ ':' ~~ port else r ~~ host
     protected def companion = Host
   }
@@ -211,19 +277,47 @@ object HttpHeaders {
     protected def companion = Location
   }
 
-  object `Remote-Address` extends ModeledCompanion
-  case class `Remote-Address`(ip: HttpIp) extends ModeledHeader {
-    def renderValue[R <: Rendering](r: R): r.type = r ~~ ip
+  object Origin extends ModeledCompanion // TODO: turn argument into repeated parameter for more convenience
+  case class Origin(originList: Seq[HttpOrigin]) extends ModeledHeader {
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ originList
+    protected def companion = Origin
+  }
+
+  object `Proxy-Authenticate` extends ModeledCompanion {
+    def apply(first: HttpChallenge, more: HttpChallenge*): `Proxy-Authenticate` = apply(first +: more)
+    implicit val challengesRenderer = Renderer.defaultSeqRenderer[HttpChallenge] // cache
+  }
+  case class `Proxy-Authenticate`(challenges: Seq[HttpChallenge]) extends ModeledHeader {
+    import `Proxy-Authenticate`.challengesRenderer
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ challenges
+    protected def companion = `Proxy-Authenticate`
+  }
+
+  object `Proxy-Authorization` extends ModeledCompanion
+  case class `Proxy-Authorization`(credentials: HttpCredentials) extends ModeledHeader {
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ credentials
+    protected def companion = `Proxy-Authorization`
+  }
+
+  object `Raw-Request-URI` extends ModeledCompanion
+  case class `Raw-Request-URI`(uri: String) extends ModeledHeader {
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ uri
+    protected def companion = `Raw-Request-URI`
+  }
+
+  object `Remote-Address` extends ModeledCompanion {
+    def apply(address: String): `Remote-Address` = apply(RemoteAddress(address))
+  }
+  case class `Remote-Address`(address: RemoteAddress) extends ModeledHeader {
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ address
     protected def companion = `Remote-Address`
   }
 
   object Server extends ModeledCompanion {
     def apply(products: String): Server = apply(ProductVersion.parseMultiple(products))
     def apply(first: ProductVersion, more: ProductVersion*): Server = apply(first +: more)
-    implicit val productsRenderer = Renderer.seqRenderer[Char, ProductVersion](separator = ' ') // cache
   }
   case class Server(products: Seq[ProductVersion])(implicit ev: ProtectedHeaderCreation.Enabled) extends ModeledHeader {
-    import Server.productsRenderer
     def renderValue[R <: Rendering](r: R): r.type = r ~~ products
     protected def companion = Server
   }
@@ -255,10 +349,8 @@ object HttpHeaders {
   object `User-Agent` extends ModeledCompanion {
     def apply(products: String): `User-Agent` = apply(ProductVersion.parseMultiple(products))
     def apply(first: ProductVersion, more: ProductVersion*): `User-Agent` = apply(first +: more)
-    implicit val productsRenderer = Renderer.seqRenderer[Char, ProductVersion](separator = ' ') // cache
   }
   case class `User-Agent`(products: Seq[ProductVersion])(implicit ev: ProtectedHeaderCreation.Enabled) extends ModeledHeader {
-    import `User-Agent`.productsRenderer
     def renderValue[R <: Rendering](r: R): r.type = r ~~ products
     protected def companion = `User-Agent`
   }
@@ -274,13 +366,26 @@ object HttpHeaders {
   }
 
   object `X-Forwarded-For` extends ModeledCompanion {
-    def apply(first: HttpIp, more: HttpIp*): `X-Forwarded-For` = apply((first +: more).map(Some(_)))
-    implicit val ipsRenderer = Renderer.defaultSeqRenderer[Option[HttpIp]](Renderer.optionRenderer("unknown"))
+    def apply(first: String, more: String*): `X-Forwarded-For` = apply((first +: more).map(RemoteAddress.apply))
+    def apply(first: RemoteAddress, more: RemoteAddress*): `X-Forwarded-For` = apply(first +: more)
+    implicit val addressesRenderer = Renderer.defaultSeqRenderer[RemoteAddress]
   }
-  case class `X-Forwarded-For`(ips: Seq[Option[HttpIp]]) extends ModeledHeader {
-    import `X-Forwarded-For`.ipsRenderer
-    def renderValue[R <: Rendering](r: R): r.type = r ~~ ips
+  case class `X-Forwarded-For`(addresses: Seq[RemoteAddress]) extends ModeledHeader {
+    import `X-Forwarded-For`.addressesRenderer
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ addresses
     protected def companion = `X-Forwarded-For`
+  }
+
+  /**
+   * Provides information about the SSL session the message was received over.
+   *
+   * For non-certificate based cipher suites (e.g., Kerberos), `localCertificates` and `peerCertificates` are both empty lists.
+   */
+  object `SSL-Session-Info` extends ModeledCompanion
+  case class `SSL-Session-Info`(info: SSLSessionInfo) extends ModeledHeader {
+    def renderValue[R <: Rendering](r: R): r.type = r ~~ "peer = " ~~ info.peerPrincipal.map { _.toString }.getOrElse("none")
+    protected def companion = `SSL-Session-Info`
+    override def toString = s"$name($info)"
   }
 
   case class RawHeader(name: String, value: String) extends HttpHeader {

@@ -7,7 +7,7 @@ libraryDependencies ++= Seq(
   "com.jcraft" % "jzlib" % "1.1.1"
 )
 
-addSbtPlugin("io.spray" % "sbt-revolver" % "0.6.2")
+addSbtPlugin("io.spray" % "sbt-revolver" % "0.7.0")
 
 addSbtPlugin("io.spray" % "sbt-twirl" % "0.6.1")
 
@@ -18,3 +18,7 @@ addSbtPlugin("com.eed3si9n" % "sbt-assembly" % "0.8.8")
 addSbtPlugin("net.virtual-void" % "sbt-dependency-graph" % "0.7.3")
 
 addSbtPlugin("com.typesafe.sbt" % "sbt-scalariform" % "1.0.1")
+
+addSbtPlugin("com.typesafe.sbt" % "sbt-osgi" % "0.5.0")
+
+addSbtPlugin("com.eed3si9n" % "sbt-unidoc" % "0.1.2")

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,12 +31,12 @@ object ModelConverter {
 
   def toHttpRequest(hsRequest: HttpServletRequest)(implicit settings: ConnectorSettings, log: LoggingAdapter): HttpRequest = {
     val (errors, parsedHeaders) = HttpParser.parseHeaders(rawHeaders(hsRequest))
-    if (!errors.isEmpty) errors.foreach(e ⇒ log.warning(e.formatPretty))
+    if (errors.nonEmpty && settings.illegalHeaderWarnings) errors.foreach(e ⇒ log.warning(e.formatPretty))
     val contentType = parsedHeaders.collectFirst { case `Content-Type`(ct) ⇒ ct }
     HttpRequest(
       method = toHttpMethod(hsRequest.getMethod),
       uri = rebuildUri(hsRequest),
-      headers = addRemoteAddressHeader(hsRequest, parsedHeaders),
+      headers = addOptionalHeaders(hsRequest, parsedHeaders),
       entity = toHttpEntity(hsRequest, contentType, hsRequest.getContentLength),
       protocol = toHttpProtocol(hsRequest.getProtocol))
   }
@@ -59,13 +59,9 @@ object ModelConverter {
       .getOrElse(throw new IllegalRequestException(MethodNotAllowed, ErrorInfo("Illegal HTTP method", name)))
 
   def rebuildUri(hsRequest: HttpServletRequest)(implicit settings: ConnectorSettings, log: LoggingAdapter): Uri = {
-    val buffer = hsRequest.getRequestURL
-    hsRequest.getQueryString match {
-      case null ⇒
-      case x    ⇒ buffer.append('?').append(x)
-    }
+    val buffer = addQueryString(hsRequest, hsRequest.getRequestURL())
     try {
-      val uri = Uri(buffer.toString)
+      val uri = Uri(buffer.toString, settings.uriParsingMode)
       if (settings.rootPath.isEmpty) uri
       else if (uri.path.startsWith(settings.rootPath)) uri.copy(path = uri.path.dropChars(settings.rootPathCharCount))
       else {
@@ -79,9 +75,21 @@ object ModelConverter {
     }
   }
 
-  def addRemoteAddressHeader(hsr: HttpServletRequest, headers: List[HttpHeader])(implicit settings: ConnectorSettings): List[HttpHeader] =
-    if (settings.remoteAddressHeader) `Remote-Address`(hsr.getRemoteAddr) :: headers
-    else headers
+  @inline
+  private def addQueryString[A <: Appendable](hsr: HttpServletRequest, buffer: A): A = {
+    hsr.getQueryString() match {
+      case null ⇒
+      case x    ⇒ buffer.append('?').append(x)
+    }
+    buffer
+  }
+
+  def addOptionalHeaders(hsr: HttpServletRequest, originalHeaders: List[HttpHeader])(implicit settings: ConnectorSettings): List[HttpHeader] = {
+    var headers = originalHeaders
+    if (settings.servletRequestAccess) headers = ServletRequestInfoHeader(hsr) :: headers
+    if (settings.remoteAddressHeader) headers = `Remote-Address`(hsr.getRemoteAddr) :: headers
+    headers
+  }
 
   def toHttpProtocol(name: String) =
     HttpProtocols.getForKey(name)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ trait AnyParamDirectives {
    *
    * Rejects the request if both form field and query parameter matcher(s) defined by the definition(s) don't match.
    */
-  def anyParam(apdm: AnyParamDefMagnet): apdm.Out = apdm()
+  /* directive */ def anyParam(apdm: AnyParamDefMagnet): apdm.Out = apdm()
 
   /**
    * Extracts a parameter either from a form field or from query parameters (in that order), and passes the value(s)
@@ -34,7 +34,7 @@ trait AnyParamDirectives {
    *
    * Rejects the request if both form field and query parameter matcher(s) defined by the definition(s) don't match.
    */
-  def anyParams(apdm: AnyParamDefMagnet): apdm.Out = apdm()
+  /* directive */ def anyParams(apdm: AnyParamDefMagnet): apdm.Out = apdm()
 }
 
 object AnyParamDirectives extends AnyParamDirectives
@@ -73,22 +73,18 @@ trait AnyParamDefMagnet2[T] {
 }
 
 object AnyParamDefMagnet2 {
+  import FieldDefMagnet2.FieldDefMagnetAux
+  import ParamDefMagnet2.ParamDefMagnetAux
+
   implicit def forTuple[T <: Product, L <: HList, Out](implicit hla: HListerAux[T, L],
-                                                       apdma: AnyParamDefMagnetAux[L]) =
+                                                       apdma: AnyParamDefMagnet2[L]) =
     new AnyParamDefMagnet2[T] {
       def apply(value: T) = apdma(hla(value))
       type Out = apdma.Out
     }
-}
 
-trait AnyParamDefMagnetAux[L] {
-  type Out
-  def apply(value: L): Out
-}
-
-object AnyParamDefMagnetAux {
   implicit def forHList[L <: HList](implicit f: LeftFolder[L, Directive0, MapReduce.type]) =
-    new AnyParamDefMagnetAux[L] {
+    new AnyParamDefMagnet2[L] {
       type Out = f.Out
       def apply(value: L) = {
         value.foldLeft(BasicDirectives.noop)(MapReduce)

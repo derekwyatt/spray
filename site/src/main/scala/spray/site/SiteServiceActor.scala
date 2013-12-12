@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@ package spray.site
 import akka.event.Logging._
 import shapeless._
 import spray.routing.directives.{ DirectoryListing, LogEntry }
-import spray.httpx.encoding.Gzip
 import spray.httpx.marshalling.Marshaller
 import spray.httpx.TwirlSupport._
 import spray.http._
@@ -27,12 +26,12 @@ import spray.routing._
 import html._
 import StatusCodes._
 
-class SiteServiceActor(settings: SiteSettings) extends HttpServiceActor {
+class SiteServiceActor(settings: SiteSettings) extends HttpServiceActor with SearchSuggestions {
 
   // format: OFF
   def receive = runRoute {
     dynamicIf(settings.devMode) { // for proper support of twirl + sbt-revolver during development
-      (get & encodeResponse(Gzip)) {
+      (get & compressResponse()) {
         host("repo.spray.io") {
           logRequestResponse(showRepoResponses("repo") _) {
             getFromBrowseableDirectories(settings.repoDirs: _*) ~
@@ -51,34 +50,55 @@ class SiteServiceActor(settings: SiteSettings) extends HttpServiceActor {
         (host("nightlies.spray.cc") & unmatchedPath) { ump =>
           redirect("http://nightlies.spray.io" + ump, Found)
         } ~
+        host(_.endsWith("parboiled.org")) {
+          redirect("https://github.com/sirthias/parboiled/wiki", Found)
+        } ~
+        host(_.endsWith("pegdown.org")) {
+          redirect("https://github.com/sirthias/pegdown", Found)
+        } ~
         host("spray.io", "localhost", "127.0.0.1") {
           path("favicon.ico") {
             complete(NotFound) // fail early in order to prevent error response logging
           } ~
           logRequestResponse(showErrorResponses _) {
+            talkCharts("scala.io") ~
+            talkCharts("wjax") ~
+            talkCharts("webinar") ~
+            searchRoute("spray.io") ~
+            path("webinar" / "video" /) { redirect("http://www.youtube.com/watch?v=7MqD7_YvZ8Q", Found) } ~
             getFromResourceDirectory("theme") ~
             pathPrefix("_images") {
               getFromResourceDirectory("sphinx/json/_images")
             } ~
             logRequest(showRequest _) {
-              path("") {
+              pathSingleSlash {
                 complete(page(home()))
               } ~
+              pathPrefix("documentation" / Segment / "api") { version =>
+                val dir = s"api/$version/"
+                pathEnd {
+                  redirect(s"/documentation/$version/api/", MovedPermanently)
+                } ~
+                pathSingleSlash {
+                  getFromResource(dir + "index.html")
+                } ~
+                getFromResourceDirectory(dir)
+              } ~
               pathSuffixTest(Slash) {
-                path("home") {
+                path("home" /) {
                   redirect("/", MovedPermanently)
                 } ~
-                path("index") {
+                path("index" /) {
                   complete(page(index()))
                 } ~
                 pathPrefixTest("blog") {
-                  path("blog") {
+                  path("blog" /) {
                     complete(page(blogIndex(Main.blog.root.children), Main.blog.root))
                   } ~
-                  path("blog" / "feed") {
+                  path("blog" / "feed" /) {
                     complete(xml.blogAtomFeed())
                   } ~
-                  path("blog" / "category" / Segment) { tag =>
+                  path("blog" / "category" / Segment /) { tag =>
                     Main.blog.posts(tag) match {
                       case Nil => complete(NotFound, page(error404()))
                       case posts => complete(page(blogIndex(posts, tag), Main.blog.root))
@@ -90,6 +110,13 @@ class SiteServiceActor(settings: SiteSettings) extends HttpServiceActor {
                 } ~
                 pathPrefixTest("documentation" / !IntNumber ~ !PathEnd ~ Rest) { subUri =>
                   redirect("/documentation/" + Main.settings.mainVersion + '/' + subUri, MovedPermanently)
+                } ~
+                requestUri { uri =>
+                  val path = uri.path.toString
+                  "-RC[1234]/".r.findFirstIn(path) match {
+                    case Some(found) => redirect(uri.withPath(Uri.Path(path.replace(found, ".0/"))), MovedPermanently)
+                    case None => reject
+                  }
                 } ~
                 sphinxNode { node =>
                   complete(page(document(node), node))
@@ -139,4 +166,14 @@ class SiteServiceActor(settings: SiteSettings) extends HttpServiceActor {
           file.getName.startsWith(".") || file.getName.startsWith("archetype-catalog")))
     }(DirectoryListing.DefaultMarshaller)
 
+  def talkCharts(talk: String) =
+    pathPrefix(talk) {
+      pathEnd {
+        redirect(s"/$talk/", MovedPermanently)
+      } ~
+        pathSingleSlash {
+          getFromResource(s"talks/$talk/index.html")
+        } ~
+        getFromResourceDirectory("talks/" + talk)
+    }
 }

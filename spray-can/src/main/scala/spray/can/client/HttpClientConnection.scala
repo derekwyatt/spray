@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,13 +20,14 @@ package client
 import scala.concurrent.duration.Duration
 import akka.actor.{ SupervisorStrategy, ReceiveTimeout, ActorRef }
 import akka.io.{ Tcp, IO }
+import spray.can.parsing.SSLSessionInfoSupport
 import spray.http.{ SetRequestTimeout, Confirmed, HttpRequestPart }
 import spray.io._
 
-private[can] class HttpClientConnection(connectCommander: ActorRef,
-                                        connect: Http.Connect,
-                                        pipelineStage: RawPipelineStage[SslTlsContext],
-                                        settings: ClientConnectionSettings) extends ConnectionHandler { actor ⇒
+private class HttpClientConnection(connectCommander: ActorRef,
+                                   connect: Http.Connect,
+                                   pipelineStage: RawPipelineStage[SslTlsContext],
+                                   settings: ClientConnectionSettings) extends ConnectionHandler { actor ⇒
   import context.system
   import connect._
 
@@ -44,7 +45,8 @@ private[can] class HttpClientConnection(connectCommander: ActorRef,
       context.setReceiveTimeout(Duration.Undefined)
       log.debug("Connected to {}", connected.remoteAddress)
       val tcpConnection = sender
-      tcpConnection ! Tcp.Register(self)
+      // if sslEncryption is enabled we may need keepOpenOnPeerClosed
+      tcpConnection ! Tcp.Register(self, keepOpenOnPeerClosed = connect.sslEncryption)
       context.watch(tcpConnection)
       connectCommander ! connected
       context.become(running(tcpConnection, pipelineStage, pipelineContext(connected)))
@@ -71,20 +73,21 @@ private[can] class HttpClientConnection(connectCommander: ActorRef,
     def remoteAddress = connected.remoteAddress
     def localAddress = connected.localAddress
     def log = actor.log
-    def sslEngine = sslEngineProvider(this)
+    def sslEngine = if (connect.sslEncryption) sslEngineProvider(this) else None
   }
 }
 
-private[can] object HttpClientConnection {
+private object HttpClientConnection {
 
   def pipelineStage(settings: ClientConnectionSettings) = {
     import settings._
     ClientFrontend(requestTimeout) >>
       ResponseChunkAggregation(responseChunkAggregationLimit) ? (responseChunkAggregationLimit > 0) >>
+      SSLSessionInfoSupport ? parserSettings.sslSessionInfoHeader >>
       ResponseParsing(parserSettings) >>
       RequestRendering(settings) >>
       ConnectionTimeouts(idleTimeout) ? (reapingCycle.isFinite && idleTimeout.isFinite) >>
-      SslTlsSupport ? sslEncryption >>
+      SslTlsSupport(maxEncryptionChunkSize, parserSettings.sslSessionInfoHeader) >>
       TickGenerator(reapingCycle) ? (idleTimeout.isFinite || requestTimeout.isFinite)
   }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,21 +33,19 @@ private[parser] trait ContentTypeHeader {
   lazy val ContentTypeHeaderValue = rule {
     MediaTypeDef ~ EOI ~~> { (main, sub, params) ⇒
       @tailrec def processParams(remaining: List[(String, String)] = params,
-                                 boundary: String = "",
                                  charset: Option[HttpCharset] = None,
-                                 builder: StringMapBuilder = null): (String, Option[HttpCharset], Map[String, String]) =
+                                 builder: StringMapBuilder = null): (Option[HttpCharset], Map[String, String]) =
         remaining match {
-          case Nil                         ⇒ (boundary, charset, if (builder eq null) Map.empty else builder.result())
-          case ("boundary", value) :: tail ⇒ processParams(tail, value, charset, builder)
-          case ("charset", value) :: tail  ⇒ processParams(tail, boundary, Some(getCharset(value)), builder)
+          case Nil                        ⇒ (charset, if (builder eq null) Map.empty else builder.result())
+          case ("charset", value) :: tail ⇒ processParams(tail, Some(getCharset(value)), builder)
           case kvp :: tail ⇒
             val b = if (builder eq null) Map.newBuilder[String, String] else builder
             b += kvp
-            processParams(tail, boundary, charset, b)
+            processParams(tail, charset, b)
         }
 
-      val (boundary, charset, parameters) = processParams()
-      val mediaType = getMediaType(main, sub, boundary, parameters)
+      val (charset, parameters) = processParams()
+      val mediaType = getMediaType(main, sub, parameters)
       ContentType(mediaType, charset)
     }
   }

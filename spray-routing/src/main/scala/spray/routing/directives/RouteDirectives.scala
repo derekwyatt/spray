@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,7 @@
 package spray.routing
 package directives
 
-import scala.concurrent.{ ExecutionContext, Future }
-import spray.httpx.marshalling.Marshaller
+import spray.httpx.marshalling.ToResponseMarshallable
 import spray.http._
 import StatusCodes._
 
@@ -27,9 +26,7 @@ trait RouteDirectives {
   /**
    * Rejects the request with an empty set of rejections.
    */
-  val reject: StandardRoute = new StandardRoute {
-    def apply(ctx: RequestContext): Unit = ctx.reject()
-  }
+  def reject: StandardRoute = RouteDirectives._reject
 
   /**
    * Rejects the request with the given rejections.
@@ -48,8 +45,8 @@ trait RouteDirectives {
   /**
    * Completes the request using the given arguments.
    */
-  def complete: (⇒ CompletionMagnet) ⇒ StandardRoute = magnet ⇒ new StandardRoute {
-    def apply(ctx: RequestContext): Unit = magnet.route(ctx)
+  def complete: (⇒ ToResponseMarshallable) ⇒ StandardRoute = marshallable ⇒ new StandardRoute {
+    def apply(ctx: RequestContext): Unit = ctx.complete(marshallable)
   }
 
   /**
@@ -61,48 +58,8 @@ trait RouteDirectives {
   }
 }
 
-object RouteDirectives extends RouteDirectives
-
-trait CompletionMagnet {
-  def route: StandardRoute
-}
-
-object CompletionMagnet {
-  implicit def fromObject[T: Marshaller](obj: T) =
-    new CompletionMagnet {
-      def route: StandardRoute = new CompletionRoute(OK, Nil, obj)
-    }
-  implicit def fromStatusObject[T: Marshaller](tuple: (StatusCode, T)) =
-    new CompletionMagnet {
-      def route: StandardRoute = new CompletionRoute(tuple._1, Nil, tuple._2)
-    }
-  implicit def fromStatusHeadersObject[T: Marshaller](tuple: (StatusCode, List[HttpHeader], T)) =
-    new CompletionMagnet {
-      def route: StandardRoute = new CompletionRoute(tuple._1, tuple._2, tuple._3)
-    }
-  implicit def fromHttpResponse(response: HttpResponse) =
-    new CompletionMagnet {
-      def route = new StandardRoute {
-        def apply(ctx: RequestContext): Unit = { ctx.complete(response) }
-      }
-    }
-  implicit def fromStatus(status: StatusCode) =
-    new CompletionMagnet {
-      def route = new StandardRoute {
-        def apply(ctx: RequestContext): Unit = { ctx.complete(status) }
-      }
-    }
-  implicit def fromHttpResponseFuture(future: Future[HttpResponse])(implicit ec: ExecutionContext) =
-    new CompletionMagnet {
-      def route = new StandardRoute {
-        def apply(ctx: RequestContext): Unit = { ctx.complete(future) }
-      }
-    }
-  implicit def fromStatusCodeFuture(future: Future[StatusCode])(implicit ec: ExecutionContext): CompletionMagnet =
-    future.map(status ⇒ HttpResponse(status, entity = status.defaultMessage))
-
-  private class CompletionRoute[T: Marshaller](status: StatusCode, headers: List[HttpHeader], obj: T)
-      extends StandardRoute {
-    def apply(ctx: RequestContext): Unit = { ctx.complete(status, headers, obj) }
+object RouteDirectives extends RouteDirectives {
+  private val _reject: StandardRoute = new StandardRoute {
+    def apply(ctx: RequestContext): Unit = ctx.reject()
   }
 }

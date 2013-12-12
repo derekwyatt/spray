@@ -7,10 +7,8 @@ import akka.util.Timeout
 import akka.pattern.ask
 import akka.actor._
 import spray.can.Http
-import spray.util.SprayActorLogging
 import spray.http._
 import HttpMethods._
-
 
 trait ConnectionLevelApiDemo {
   private implicit val timeout: Timeout = 5.seconds
@@ -27,7 +25,7 @@ trait ConnectionLevelApiDemo {
   // as well as how requests are scheduled onto them.
 
   // Actor that manages the lifecycle of a single HTTP connection for a single request
-  class MyRequestActor(host: String) extends Actor with SprayActorLogging {
+  class MyRequestActor(host: String) extends Actor with ActorLogging {
     import context.system
 
     def receive: Receive = {
@@ -43,7 +41,7 @@ trait ConnectionLevelApiDemo {
         sender ! request
         context.become(waitingForResponse(commander))
 
-      case Http.CommandFailed(Http.Connect(address, _, _, _)) =>
+      case Http.CommandFailed(Http.Connect(address, _, _, _, _)) =>
         log.warning("Could not connect to {}", address)
         commander ! Status.Failure(new RuntimeException("Connection error"))
         context.stop(self)
@@ -51,7 +49,7 @@ trait ConnectionLevelApiDemo {
 
     def waitingForResponse(commander: ActorRef): Receive = {
       case response@ HttpResponse(status, entity, _, _) =>
-        log.info("Connection-Level API: received {} response with {} bytes", status, entity.buffer.length)
+        log.info("Connection-Level API: received {} response with {} bytes", status, entity.data.length)
         sender ! Http.Close
         context.become(waitingForClose(commander, response))
 

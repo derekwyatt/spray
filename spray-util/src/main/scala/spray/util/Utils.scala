@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import com.typesafe.config.{ ConfigFactory, Config }
 import scala.collection.JavaConverters._
 import scala.reflect.{ classTag, ClassTag }
 import akka.actor._
+import scala.annotation.tailrec
 
 object Utils {
 
@@ -46,7 +47,7 @@ object Utils {
   def installEventStreamLoggerFor(channel: Class[_])(implicit system: ActorSystem): Unit = {
     synchronized {
       if (eventStreamLogger == null)
-        eventStreamLogger = system.actorOf(Props(new Actor with SprayActorLogging {
+        eventStreamLogger = system.actorOf(Props(new Actor with ActorLogging {
           def receive = { case x ⇒ log.warning(x.toString) }
         }), name = "event-stream-logger")
     }
@@ -61,9 +62,8 @@ object Utils {
     installEventStreamLoggerFor[UnhandledMessage]
   }
 
-  lazy val sprayConfigAdditions: Config = ConfigFactory.parseMap {
-    Map("spray.hostname" -> tryOrElse(InetAddress.getLocalHost.getHostName, _ ⇒ "")).asJava
-  }
+  lazy val sprayConfigAdditions: Config =
+    mapToConfig(Map("spray.hostname" -> tryOrElse(InetAddress.getLocalHost.getHostName, _ ⇒ "")))
 
   def mapToConfig(map: Map[String, Any]): Config = ConfigFactory.parseMap(map.asJava)
 
@@ -74,5 +74,26 @@ object Utils {
       val pre = if (si) "kMGTPE".charAt(exp - 1).toString else "KMGTPE".charAt(exp - 1).toString + 'i'
       "%.1f %sB" format (bytes / math.pow(unit, exp), pre)
     } else bytes.toString + "  B"
+  }
+
+  /** Extracts and concatenates all parts of a nested exception */
+  def fullErrorMessageFor(t: Exception): String = {
+    val sb = new StringBuilder
+
+    @tailrec def appendOneMessage(t: Throwable): Unit = {
+      sb.append('[')
+      sb.append(t.getClass.getSimpleName)
+      sb.append(':')
+      sb.append(t.getMessage)
+      sb.append(']')
+
+      if (t.getCause ne null) {
+        sb.append(" -> ")
+        appendOneMessage(t.getCause)
+      }
+    }
+
+    appendOneMessage(t)
+    sb.toString()
   }
 }

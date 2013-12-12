@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,11 +20,74 @@ package directives
 import spray.util._
 import spray.http._
 import spray.httpx.encoding._
+import akka.actor.ActorRefFactory
 
 trait EncodingDirectives {
   import BasicDirectives._
+  import ChunkingDirectives._
   import MiscDirectives._
   import RouteDirectives._
+
+  // encoding
+
+  /**
+   * Wraps its inner Route with encoding support using the given Encoder.
+   */
+  def encodeResponse(magnet: EncodeResponseMagnet): Directive0 = {
+    import magnet._
+    def applyEncoder = mapRequestContext { ctx ⇒
+      @volatile var compressor: Compressor = null
+      ctx.withHttpResponsePartMultiplied {
+        case response: HttpResponse ⇒ encoder.encode(response) :: Nil
+        case x @ ChunkedResponseStart(response) ⇒ encoder.startEncoding(response) match {
+          case Some((compressedResponse, c)) ⇒
+            compressor = c
+            ChunkedResponseStart(compressedResponse) :: Nil
+          case None ⇒ x :: Nil
+        }
+        case MessageChunk(data, exts) if compressor != null ⇒
+          MessageChunk(HttpData(compressor.compress(data.toByteArray).flush()), exts) :: Nil
+        case x: ChunkedMessageEnd if compressor != null ⇒
+          val body = compressor.finish()
+          if (body.length > 0) MessageChunk(body) :: x :: Nil else x :: Nil
+        case x ⇒ x :: Nil
+      }
+    }
+    responseEncodingAccepted(encoder.encoding) &
+      applyEncoder &
+      cancelAllRejections(ofType[UnacceptedResponseEncodingRejection]) &
+      autoChunkFileBytes(autoChunkThreshold, autoChunkSize)
+  }
+
+  /**
+   * Rejects the request with an UnacceptedResponseEncodingRejection
+   * if the given encoding is not accepted for the response.
+   */
+  def responseEncodingAccepted(encoding: HttpEncoding): Directive0 =
+    extract(_.request.isEncodingAccepted(encoding))
+      .flatMap(if (_) pass else reject(UnacceptedResponseEncodingRejection(encoding)))
+
+  /**
+   * Wraps its inner Route with response compression, using the specified
+   * encoders in the given order of preference.
+   * If no encoders are specifically given Gzip, Deflate and NoEncoding
+   * are used in this order, depending on what the client accepts.
+   */
+  def compressResponse(magnet: CompressResponseMagnet): Directive0 = {
+    import magnet._
+    encoders.tail.foldLeft(encodeResponse(encoders.head)) { (r, encoder) ⇒ r | encodeResponse(encoder) }
+  }
+
+  /**
+   * Wraps its inner Route with response compression if and only if the client
+   * specifically requests compression with an `Accept-Encoding` header.
+   */
+  def compressResponseIfRequested(magnet: RefFactoryMagnet): Directive0 = {
+    import magnet._
+    compressResponse(NoEncoding, Gzip, Deflate)
+  }
+
+  // decoding
 
   /**
    * Wraps its inner Route with decoding support using the given Decoder.
@@ -40,7 +103,7 @@ trait EncodingDirectives {
     requestEntityEmpty | (
       requestEncodedWith(decoder.encoding) &
       applyDecoder &
-      cancelAllRejections(ofType[UnsupportedRequestEncodingRejection]))
+      cancelAllRejections(ofTypes(classOf[UnsupportedRequestEncodingRejection], classOf[CorruptRequestEncodingRejection])))
   }
 
   /**
@@ -53,40 +116,45 @@ trait EncodingDirectives {
     }
 
   /**
-   * Wraps its inner Route with encoding support using the given Encoder.
+   * Decompresses the incoming request if it is GZip or Deflate encoded.
+   * Uncompressed requests are passed on to the inner route unchanged.
    */
-  def encodeResponse(encoder: Encoder) = {
-    def applyEncoder = mapRequestContext { ctx ⇒
-      @volatile var compressor: Compressor = null
-      ctx.withHttpResponsePartMultiplied {
-        case response: HttpResponse ⇒ encoder.encode(response) :: Nil
-        case x @ ChunkedResponseStart(response) ⇒ encoder.startEncoding(response) match {
-          case Some((compressedResponse, c)) ⇒
-            compressor = c
-            ChunkedResponseStart(compressedResponse) :: Nil
-          case None ⇒ x :: Nil
-        }
-        case MessageChunk(body, exts) if compressor != null ⇒
-          MessageChunk(compressor.compress(body).flush(), exts) :: Nil
-        case x: ChunkedMessageEnd if compressor != null ⇒
-          val body = compressor.finish()
-          if (body.length > 0) MessageChunk(body) :: x :: Nil else x :: Nil
-        case x ⇒ x :: Nil
-      }
-    }
-    responseEncodingAccepted(encoder.encoding) &
-      applyEncoder &
-      cancelAllRejections(ofType[UnacceptedResponseEncodingRejection])
-  }
+  def decompressRequest(): Directive0 = decompressRequest(Gzip, Deflate, NoEncoding)
 
   /**
-   * Rejects the request with an UnacceptedResponseEncodingRejection
-   * if the given encoding is not accepted for the response.
+   * Decompresses the incoming request if it is encoded with one of the given
+   * encoders. If the request encoding doesn't match one of the given encoders
+   * the request is rejected with an `UnsupportedRequestEncodingRejection`.
    */
-  def responseEncodingAccepted(encoding: HttpEncoding): Directive0 =
-    extract(_.request.isEncodingAccepted(encoding))
-      .flatMap(if (_) pass else reject(UnacceptedResponseEncodingRejection(encoding)))
-
+  def decompressRequest(first: Decoder, more: Decoder*): Directive0 =
+    if (more.isEmpty) decodeRequest(first)
+    else more.foldLeft(decodeRequest(first)) { (r, decoder) ⇒ r | decodeRequest(decoder) }
 }
 
 object EncodingDirectives extends EncodingDirectives
+
+class EncodeResponseMagnet(val encoder: Encoder, val autoChunkThreshold: Long = 128 * 1024,
+                           val autoChunkSize: Int = 128 * 1024)(implicit val refFactory: ActorRefFactory)
+object EncodeResponseMagnet {
+  implicit def fromEncoder(encoder: Encoder)(implicit factory: ActorRefFactory): EncodeResponseMagnet = // # EncodeResponseMagnet
+    new EncodeResponseMagnet(encoder)
+  implicit def fromEncoderThresholdAndChunkSize(t: (Encoder, Long, Int))(implicit factory: ActorRefFactory): EncodeResponseMagnet = // # EncodeResponseMagnet
+    new EncodeResponseMagnet(t._1, t._2, t._3)
+}
+
+class CompressResponseMagnet(val encoders: List[Encoder])(implicit val refFactory: ActorRefFactory)
+object CompressResponseMagnet {
+  implicit def fromUnit(u: Unit)(implicit refFactory: ActorRefFactory): CompressResponseMagnet =
+    new CompressResponseMagnet(Gzip :: Deflate :: NoEncoding :: Nil)
+  implicit def fromEncoders1(e: Encoder)(implicit refFactory: ActorRefFactory): CompressResponseMagnet =
+    new CompressResponseMagnet(e :: Nil)
+  implicit def fromEncoders2(t: (Encoder, Encoder))(implicit refFactory: ActorRefFactory): CompressResponseMagnet =
+    new CompressResponseMagnet(t._1 :: t._2 :: Nil)
+  implicit def fromEncoders3(t: (Encoder, Encoder, Encoder))(implicit refFactory: ActorRefFactory): CompressResponseMagnet =
+    new CompressResponseMagnet(t._1 :: t._2 :: t._3 :: Nil)
+}
+
+class RefFactoryMagnet(implicit val refFactory: ActorRefFactory)
+object RefFactoryMagnet {
+  implicit def fromUnit(u: Unit)(implicit refFactory: ActorRefFactory): RefFactoryMagnet = new RefFactoryMagnet
+}

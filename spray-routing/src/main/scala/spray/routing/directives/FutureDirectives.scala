@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ import shapeless._
 import scala.concurrent.{ ExecutionContext, Future }
 import scala.util.control.NonFatal
 import scala.util.{ Failure, Success, Try }
-import spray.httpx.marshalling.Marshaller
+import spray.httpx.marshalling.ToResponseMarshaller
 
 trait FutureDirectives {
 
@@ -56,7 +56,7 @@ object FutureDirectives extends FutureDirectives
 trait OnCompleteFutureMagnet[T] extends Directive1[Try[T]]
 
 object OnCompleteFutureMagnet {
-  implicit def apply[T](future: Future[T])(implicit ec: ExecutionContext) =
+  implicit def apply[T](future: ⇒ Future[T])(implicit ec: ExecutionContext) =
     new OnCompleteFutureMagnet[T] {
       def happly(f: (Try[T] :: HNil) ⇒ Route) = ctx ⇒
         try future.onComplete(t ⇒ f(t :: HNil)(ctx))
@@ -70,7 +70,7 @@ trait OnSuccessFutureMagnet {
 }
 
 object OnSuccessFutureMagnet {
-  implicit def apply[T](future: Future[T])(implicit hl: HListable[T], ec: ExecutionContext) =
+  implicit def apply[T](future: ⇒ Future[T])(implicit hl: HListable[T], ec: ExecutionContext) =
     new Directive[hl.Out] with OnSuccessFutureMagnet {
       type Out = hl.Out
       def get = this
@@ -86,7 +86,7 @@ object OnSuccessFutureMagnet {
 trait OnFailureFutureMagnet extends Directive1[Throwable]
 
 object OnFailureFutureMagnet {
-  implicit def apply[T](future: Future[T])(implicit m: Marshaller[T], ec: ExecutionContext) =
+  implicit def apply[T](future: ⇒ Future[T])(implicit m: ToResponseMarshaller[T], ec: ExecutionContext) =
     new OnFailureFutureMagnet {
       def happly(f: (Throwable :: HNil) ⇒ Route) = ctx ⇒ future.onComplete {
         case Success(t) ⇒ ctx.complete(t)

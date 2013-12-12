@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         authenticate(BasicAuth()) { _ ⇒ completeOk }
       } ~> check {
         status === Unauthorized
-        entityAs[String] === "The supplied authentication is invalid"
+        responseAs[String] === "The supplied authentication is invalid"
       }
     }
     "respond with Unauthorized plus WWW-Authenticate header for AuthenticationRequiredRejections" in {
@@ -44,7 +44,7 @@ class RejectionHandlerSpec extends RoutingSpec {
       } ~> check {
         status === Unauthorized
         headers === `WWW-Authenticate`(HttpChallenge("Basic", "Secured Resource")) :: Nil
-        entityAs[String] === "The resource requires authentication, which was not supplied with the request"
+        responseAs[String] === "The resource requires authentication, which was not supplied with the request"
       }
     }
     "respond with Forbidden for requests resulting in an AuthorizationFailedRejection" in {
@@ -52,7 +52,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         authorize(false) { completeOk }
       } ~> check {
         status === Forbidden
-        entityAs[String] === "The supplied authentication is not authorized to access this resource"
+        responseAs[String] === "The supplied authentication is not authorized to access this resource"
       }
     }
     "respond with BadRequest for requests resulting in a CorruptRequestEncodingRejection" in {
@@ -60,7 +60,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         decodeRequest(Gzip) { completeOk }
       } ~> check {
         status === BadRequest
-        entityAs[String] === "The requests encoding is corrupt:\nNot in GZIP format"
+        responseAs[String] === "The requests encoding is corrupt:\nNot in GZIP format"
       }
     }
     "respond with BadRequest for requests resulting in a MalformedFormFieldRejection" in {
@@ -68,7 +68,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         formField('amount.as[Int]) { _ ⇒ completeOk }
       } ~> check {
         status === BadRequest
-        entityAs[String] === "The form field 'amount' was malformed:\n'12.2' is not a valid 32-bit integer value"
+        responseAs[String] === "The form field 'amount' was malformed:\n'12.2' is not a valid 32-bit integer value"
       }
     }
     "respond with BadRequest for requests resulting in a MalformedQueryParamRejection" in {
@@ -76,7 +76,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         parameters('amount.as[Int]) { _ ⇒ completeOk }
       } ~> check {
         status === BadRequest
-        entityAs[String] === "The query parameter 'amount' was malformed:\n" +
+        responseAs[String] === "The query parameter 'amount' was malformed:\n" +
           "'xyz' is not a valid 32-bit integer value"
       }
     }
@@ -85,7 +85,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         entity(as[NodeSeq]) { _ ⇒ completeOk }
       } ~> check {
         status === BadRequest
-        entityAs[String] === "The request content was malformed:\n" +
+        responseAs[String] === "The request content was malformed:\n" +
           "XML document structures must start and end within the same entity."
       }
     }
@@ -95,7 +95,15 @@ class RejectionHandlerSpec extends RoutingSpec {
           put { complete("yes") }
       } ~> check {
         status === MethodNotAllowed
-        entityAs[String] === "HTTP method not allowed, supported methods: GET, PUT"
+        responseAs[String] === "HTTP method not allowed, supported methods: GET, PUT"
+      }
+    }
+    "respond with BadRequest for requests resulting in SchemeRejections" in {
+      Get("http://example.com/hello") ~> wrap {
+        scheme("https") { complete("yes") }
+      } ~> check {
+        status === BadRequest
+        responseAs[String] === "Uri scheme not allowed, supported schemes: https"
       }
     }
     "respond with BadRequest for requests resulting in a MissingFormFieldRejection" in {
@@ -103,7 +111,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         formFields('amount, 'orderId) { (_, _) ⇒ completeOk }
       } ~> check {
         status === BadRequest
-        entityAs[String] === "Request is missing required form field 'amount'"
+        responseAs[String] === "Request is missing required form field 'amount'"
       }
     }
     "respond with NotFound for requests resulting in a MissingQueryParamRejection" in {
@@ -111,7 +119,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         parameters('amount, 'orderId) { (_, _) ⇒ completeOk }
       } ~> check {
         status === NotFound
-        entityAs[String] === "Request is missing required query parameter 'amount'"
+        responseAs[String] === "Request is missing required query parameter 'amount'"
       }
     }
     "respond with BadRequest for requests resulting in RequestEntityExpectedRejection" in {
@@ -120,16 +128,16 @@ class RejectionHandlerSpec extends RoutingSpec {
         entity(as[String]) { _ ⇒ completeOk }
       } ~> check {
         status === BadRequest
-        entityAs[String] === "Request entity expected but not supplied"
+        responseAs[String] === "Request entity expected but not supplied"
       }
     }
     "respond with NotAcceptable for requests resulting in UnacceptedResponseContentTypeRejection" in {
-      Get() ~> `Accept`(`text/css`) ~> {
-        wrap { complete("text text text") }
+      Get() ~> `Accept`(`text/css`) ~> `Accept-Encoding`(HttpEncodings.identity) ~> {
+        wrap { complete("text text text") ~ encodeResponse(Gzip)(complete("test")) }
       } ~> check {
         status === NotAcceptable
-        entityAs[String] === "Resource representation is only available " +
-          "with these Content-Types:\ntext/plain"
+        responseAs[String] === "Resource representation is only available " +
+          "with these Content-Types:\ntext/plain; charset=UTF-8\ntext/plain"
       }
     }
     "respond with NotAcceptable for requests resulting in UnacceptedResponseEncodingRejection" in {
@@ -137,7 +145,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         (encodeResponse(Gzip) | encodeResponse(Deflate)) { completeOk }
       } ~> check {
         status === NotAcceptable
-        entityAs[String] === "Resource representation is only available with these Content-Encodings:\ngzip\ndeflate"
+        responseAs[String] === "Resource representation is only available with these Content-Encodings:\ngzip\ndeflate"
       }
     }
     "respond with UnsupportedMediaType for requests resulting in UnsupportedRequestContentTypeRejection" in {
@@ -145,7 +153,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         entity(as[NodeSeq]) { _ ⇒ completeOk }
       } ~> check {
         status === UnsupportedMediaType
-        entityAs[String] === "There was a problem with the requests Content-Type:\n" +
+        responseAs[String] === "There was a problem with the requests Content-Type:\n" +
           "Expected 'text/xml' or 'application/xml' or 'text/html' or 'application/xhtml+xml'"
       }
     }
@@ -154,7 +162,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         (decodeRequest(Gzip) | decodeRequest(Deflate)) { completeOk }
       } ~> check {
         status === BadRequest
-        entityAs[String] === "The requests Content-Encoding must be one the following:\ngzip\ndeflate"
+        responseAs[String] === "The requests Content-Encoding must be one the following:\ngzip\ndeflate"
       }
     }
     "respond with BadRequest for requests resulting in a ValidationRejection" in {
@@ -162,7 +170,7 @@ class RejectionHandlerSpec extends RoutingSpec {
         validate(false, "Oh noo!") { completeOk }
       } ~> check {
         status === BadRequest
-        entityAs[String] === "Oh noo!"
+        responseAs[String] === "Oh noo!"
       }
     }
   }

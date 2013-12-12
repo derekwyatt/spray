@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,14 +21,28 @@ import scala.concurrent.duration.Duration
 
 class PimpedConfig(underlying: Config) {
 
-  def getDuration(path: String) = underlying.getString(path) match {
-    case "infinite" ⇒ Duration.Undefined
+  def getDuration(path: String): Duration = underlying.getString(path) match {
+    case "infinite" ⇒ Duration.Inf
     case x          ⇒ Duration(x)
   }
 
-  def getPossiblyInfiniteInt(path: String) = underlying.getString(path) match {
+  def getPossiblyInfiniteInt(path: String): Int = underlying.getString(path) match {
     case "infinite" ⇒ Int.MaxValue
     case x          ⇒ underlying.getInt(path)
   }
 
+  def getIntBytes(path: String): Int = {
+    val value: Long = underlying getBytes path
+    if (value <= Int.MaxValue) value.toInt
+    else sys.error(s"Config setting '$path' must not be larger than ${Int.MaxValue}")
+  }
+
+  def getPossiblyInfiniteIntBytes(path: String): Int = underlying.getString(path) match {
+    case "infinite" ⇒ Int.MaxValue
+    case x          ⇒ getIntBytes(path)
+  }
+  def getPossiblyInfiniteLongBytes(path: String): Long = underlying.getString(path) match {
+    case "infinite" ⇒ Long.MaxValue
+    case x          ⇒ getIntBytes(path)
+  }
 }

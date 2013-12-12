@@ -114,7 +114,6 @@ However, the different response parts of a chunked response need to be sent to t
 
 .. caution:: Since the ``ActorRef`` used as the sender of a request is an UnregisteredActorRef_ it is not
    reachable remotely. This means that the service actor needs to live in the same JVM as the connector servlet.
-   This will be changed before the 1.1 final release.
 
 .. _UnregisteredActorRef: /documentation/1.1-M7/spray-util/#unregisteredactorref
 
@@ -186,6 +185,17 @@ and *not* written through to the servlet container (as the connector servlet set
 .. note:: The ``Content-Type`` header has special status in *spray* since its value is part of the ``HttpEntity`` model
    class. Even though the header also remains in the ``headers`` list of the ``HttpRequest`` *spray's* higher layers
    (like *spray-routing*) only work with the Content-Type value contained in the ``HttpEntity``.
+
+
+Accessing HttpServletRequest
+----------------------------
+
+If your application needs access to the ``javax.servlet.http.HttpServletRequest``, the ``spray.servlet.servlet-request-access``
+setting can be set to ``on``. This results in the connector servlet adding an additional request header of type
+``spray.servlet.ServletRequestInfoHeader``. This allows the service actor (or directives) to access
+members of ``HttpServletRequest`` that are not in ``HttpRequest``. This is necessary when working with container
+managed security and access to the authenticated principal is required (via ``getUserPrincipal``) or when accessing
+an authenticated client SSL certificate (via ``getAttribute("javax.servlet.request.X509Certificate")``).
 
 
 Differences to spray-can

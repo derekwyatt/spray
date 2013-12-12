@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,8 +29,8 @@ import HttpCharsets._
 class MarshallingDirectivesSpec extends RoutingSpec {
 
   implicit val IntUnmarshaller =
-    Unmarshaller[Int](ContentTypeRange(`text/xml`, `ISO-8859-2`), `text/html`, `application/xhtml+xml`) {
-      case HttpBody(_, buffer) ⇒ XML.load(new ByteArrayInputStream(buffer)).text.toInt
+    Unmarshaller[Int](ContentTypeRange(`text/xml`, HttpCharsets.getForKey("iso-8859-2").get), `text/html`, `application/xhtml+xml`) {
+      case HttpEntity.NonEmpty(_, data) ⇒ XML.load(new ByteArrayInputStream(data.toByteArray)).text.toInt
     }
 
   implicit val IntMarshaller =
@@ -40,7 +40,7 @@ class MarshallingDirectivesSpec extends RoutingSpec {
     "extract an object from the requests entity using the in-scope Unmarshaller" in {
       Put("/", <p>cool</p>) ~> {
         entity(as[NodeSeq]) { echoComplete }
-      } ~> check { entityAs[String] === "<p>cool</p>" }
+      } ~> check { responseAs[String] === "<p>cool</p>" }
     }
     "return a RequestEntityExpectedRejection rejection if the request has no entity" in {
       Put() ~> {
@@ -64,12 +64,12 @@ class MarshallingDirectivesSpec extends RoutingSpec {
     "extract an Option[T] from the requests HttpContent using the in-scope Unmarshaller" in {
       Put("/", <p>cool</p>) ~> {
         entity(as[Option[NodeSeq]]) { echoComplete }
-      } ~> check { entityAs[String] === "Some(<p>cool</p>)" }
+      } ~> check { responseAs[String] === "Some(<p>cool</p>)" }
     }
     "extract an Option[T] as None if the request has no entity" in {
       Put() ~> {
         entity(as[Option[Int]]) { echoComplete }
-      } ~> check { entityAs[String] === "None" }
+      } ~> check { responseAs[String] === "None" }
     }
     "return an UnsupportedRequestContentTypeRejection if no matching unmarshaller is in scope (for Option[T]s)" in {
       Put("/", HttpEntity(`text/css`, "<p>cool</p>")) ~> {
@@ -77,6 +77,29 @@ class MarshallingDirectivesSpec extends RoutingSpec {
       } ~> check {
         rejection === UnsupportedRequestContentTypeRejection(
           "Expected 'text/xml' or 'application/xml' or 'text/html' or 'application/xhtml+xml'")
+      }
+    }
+    "extract from a multi-unmarshaller" in {
+      case class Person(name: String)
+      import spray.json.DefaultJsonProtocol._
+      import spray.httpx.SprayJsonSupport._
+      val jsonUnmarshaller: Unmarshaller[Person] = jsonFormat1(Person)
+      val xmlUnmarshaller: Unmarshaller[Person] = Unmarshaller.delegate[NodeSeq, Person](`text/xml`) { seq ⇒
+        Person(seq.text)
+      }
+
+      implicit val unmarshaller = Unmarshaller.oneOf[Person](jsonUnmarshaller, xmlUnmarshaller)
+
+      val route = entity(as[Person]) { echoComplete }
+
+      Put("/", HttpEntity(`text/xml`, "<name>Peter Xml</name>")) ~> route ~> check {
+        responseAs[String] === "Person(Peter Xml)"
+      }
+      Put("/", HttpEntity(`application/json`, """{ "name": "Paul Json" }""")) ~> route ~> check {
+        responseAs[String] === "Person(Paul Json)"
+      }
+      Put("/", HttpEntity(`text/plain`, """name = Sir Text }""")) ~> route ~> check {
+        rejection === UnsupportedRequestContentTypeRejection("Can't unmarshal from text/plain")
       }
     }
   }
@@ -135,26 +158,6 @@ class MarshallingDirectivesSpec extends RoutingSpec {
       Get() ~> addHeader(`Accept-Charset`(`ISO-8859-1`)) ~> complete(foo) ~> check {
         rejection === UnacceptedResponseContentTypeRejection(ContentType(`application/json`, `UTF-8`) :: Nil)
       }
-    }
-  }
-
-  "Completion with a Future" should {
-    "work for successful futures" in {
-      Get() ~> complete(Promise.successful("yes").future) ~> check { entityAs[String] === "yes" }
-    }
-    "work for failed futures" in {
-      object TestException extends spray.util.SingletonException
-      Get() ~> complete(Promise.failed[String](TestException).future) ~>
-        check {
-          status === StatusCodes.InternalServerError
-          entityAs[String] === "There was an internal server error."
-        }
-    }
-    "work for futures failed with a RejectionError" in {
-      Get() ~> complete(Promise.failed[String](RejectionError(AuthorizationFailedRejection)).future) ~>
-        check {
-          rejection === AuthorizationFailedRejection
-        }
     }
   }
 }

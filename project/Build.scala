@@ -1,7 +1,10 @@
 import sbt._
 import Keys._
+import com.typesafe.sbt.osgi.SbtOsgi._
+import sbtunidoc.Plugin._
+import UnidocKeys._
 
-object Build extends Build with DocSupport {
+object Build extends Build {
   import BuildSettings._
   import Dependencies._
 
@@ -19,7 +22,29 @@ object Build extends Build with DocSupport {
       sprayIO, sprayIOTests, sprayRouting, sprayRoutingTests, sprayServlet, sprayTestKit, sprayUtil)
     .settings(basicSettings: _*)
     .settings(noPublishing: _*)
-    .settings(moveApiDocsSettings: _*)
+    .settings(unidocSettings: _*)
+    .settings(
+      excludedProjects in unidoc in ScalaUnidoc ++= Seq(
+        "docs", "echo-server", "examples", "on-jetty", "on-spray-can", "server-benchmark", "simple-http-client",
+        "simple-http-server", "simple-routing-app", "simple-spray-client", "simple-spray-servlet-server", "site",
+        "spray-can-examples", "spray-client-examples", "spray-io-examples", "spray-routing-examples",
+        "spray-servlet-examples"
+      ),
+      target in (ScalaUnidoc, unidoc) <<= (resourceManaged in Compile in site, version) { (path, version) =>
+        (path / "api" / version)
+      },
+      /* Use this task to generate list to paste into above excludedProjects list.
+         We could do it directly if excludedProjects were a Task
+      TaskKey[Unit]("print-aggregated", "") <<= state map { state =>
+        val ps =
+          Set(
+            docs, site, examples
+          ).flatMap(Utils.aggregatedProjects(Project.structure(state)))
+        println(ps.toSeq.sorted.map("\"" + _ + "\"").mkString(", "))
+      },*/
+      scalacOptions in (ScalaUnidoc, unidoc) += "-Ymacro-no-expand"
+    )
+
 
 
   // -------------------------------------------------------------------------------------------------------------------
@@ -29,6 +54,7 @@ object Build extends Build with DocSupport {
   lazy val sprayCaching = Project("spray-caching", file("spray-caching"))
     .dependsOn(sprayUtil)
     .settings(sprayModuleSettings: _*)
+    .settings(osgiSettings(exports = Seq("spray.caching")): _*)
     .settings(libraryDependencies ++=
       provided(akkaActor) ++
       compile(clHashMap) ++
@@ -39,6 +65,7 @@ object Build extends Build with DocSupport {
   lazy val sprayCan = Project("spray-can", file("spray-can"))
     .dependsOn(sprayIO, sprayHttp, sprayUtil)
     .settings(sprayModuleSettings: _*)
+    .settings(osgiSettings(exports = Seq("spray.can")): _*)
     .settings(libraryDependencies ++=
       provided(akkaActor) ++
       test(akkaTestKit, specs2)
@@ -49,12 +76,13 @@ object Build extends Build with DocSupport {
     .dependsOn(sprayCan, sprayHttp, sprayHttpx, sprayIO, sprayTestKit, sprayUtil)
     .settings(sprayModuleSettings: _*)
     .settings(noPublishing: _*)
-    .settings(libraryDependencies ++= test(akkaActor, akkaTestKit, specs2))
+    .settings(libraryDependencies ++= test(akkaActor, specs2))
 
 
   lazy val sprayClient = Project("spray-client", file("spray-client"))
     .dependsOn(sprayCan, sprayHttp, sprayHttpx, sprayUtil)
     .settings(sprayModuleSettings: _*)
+    .settings(osgiSettings(exports = Seq("spray.client")): _*)
     .settings(libraryDependencies ++=
       provided(akkaActor) ++
       test(akkaTestKit, specs2)
@@ -62,9 +90,12 @@ object Build extends Build with DocSupport {
 
 
   lazy val sprayHttp = Project("spray-http", file("spray-http"))
+    .dependsOn(sprayUtil)
     .settings(sprayModuleSettings: _*)
+    .settings(osgiSettings(exports = Seq("spray.http")): _*)
     .settings(libraryDependencies ++=
       compile(parboiled) ++
+      provided(akkaActor) ++
       test(specs2)
     )
 
@@ -73,16 +104,24 @@ object Build extends Build with DocSupport {
     .dependsOn(sprayHttp, sprayUtil,
       sprayIO) // for access to akka.io.Tcp, can go away after upgrade to Akka 2.2
     .settings(sprayModuleSettings: _*)
+    .settings(osgiSettings(exports = Seq("spray.httpx"), imports = Seq(
+      "spray.json.*;resolution := optional",
+      "net.liftweb.*;resolution := optional",
+      "org.json4s.*;resolution := optional",
+      "twirl.*;resolution := optional",
+      "play.*;resolution := optional"
+    )): _*)
     .settings(libraryDependencies ++=
       compile(mimepull) ++
-      provided(akkaActor, sprayJson, twirlApi, liftJson, json4sNative, json4sJackson) ++
+      provided(akkaActor, sprayJson, twirlApi, liftJson, json4sNative, json4sJackson, playJson) ++
       test(specs2)
     )
 
 
   lazy val sprayIO = Project("spray-io", file("spray-io"))
-    .dependsOn(sprayUtil)
+    .dependsOn(sprayUtil, sprayHttp)
     .settings(sprayModuleSettings: _*)
+    .settings(osgiSettings(exports = Seq("spray.io", "akka.io")): _*)
     .settings(libraryDependencies ++= provided(akkaActor, scalaReflect))
 
 
@@ -90,7 +129,7 @@ object Build extends Build with DocSupport {
     .dependsOn(sprayIO, sprayTestKit, sprayUtil)
     .settings(sprayModuleSettings: _*)
     .settings(noPublishing: _*)
-    .settings(libraryDependencies ++= test(akkaActor, akkaTestKit, specs2, scalatest))
+    .settings(libraryDependencies ++= test(akkaActor, specs2, scalatest))
 
 
   lazy val sprayRouting = Project("spray-routing", file("spray-routing"))
@@ -101,6 +140,7 @@ object Build extends Build with DocSupport {
       sprayIO) // for access to akka.io.Tcp, can go away after upgrade to Akka 2.2
     .settings(sprayModuleSettings: _*)
     .settings(spray.boilerplate.BoilerplatePlugin.Boilerplate.settings: _*)
+    .settings(osgiSettings(exports = Seq("spray.routing"), imports = Seq("shapeless.*;resolution:=optional")): _*)
     .settings(libraryDependencies ++=
       compile(shapeless) ++
       provided(akkaActor)
@@ -111,13 +151,14 @@ object Build extends Build with DocSupport {
     .dependsOn(sprayCaching, sprayHttp, sprayHttpx, sprayRouting, sprayTestKit, sprayUtil)
     .settings(sprayModuleSettings: _*)
     .settings(noPublishing: _*)
-    .settings(libraryDependencies ++= test(akkaActor, akkaTestKit, specs2, shapeless, sprayJson))
+    .settings(libraryDependencies ++= test(akkaActor, specs2, shapeless, sprayJson))
 
 
   lazy val sprayServlet = Project("spray-servlet", file("spray-servlet"))
     .dependsOn(sprayHttp, sprayUtil,
       sprayIO) // for access to akka.io.Tcp, can go away after upgrade to Akka 2.2
     .settings(sprayModuleSettings: _*)
+    .settings(osgiSettings(exports = Seq("spray.servlet"), imports = Seq("javax.servlet.*;version=\"[2.6,4.0)\"")): _*)
     .settings(libraryDependencies ++=
       provided(akkaActor, servlet30) ++
       test(specs2)
@@ -133,12 +174,13 @@ object Build extends Build with DocSupport {
       sprayUtil
     )
     .settings(sprayModuleSettings: _*)
-    .settings(libraryDependencies ++= provided(akkaActor, akkaTestKit, scalatest, specs2))
+    .settings(libraryDependencies ++= akkaTestKit +: provided(akkaActor, scalatest, specs2))
 
 
   lazy val sprayUtil = Project("spray-util", file("spray-util"))
     .settings(sprayModuleSettings: _*)
     .settings(sprayVersionConfGeneration: _*)
+    .settings(osgiSettings(exports = Seq("spray.util", "akka.spray")): _*)
     .settings(libraryDependencies ++=
       provided(akkaActor, scalaReflect) ++
       test(akkaTestKit, specs2)
@@ -156,7 +198,6 @@ object Build extends Build with DocSupport {
   // -------------------------------------------------------------------------------------------------------------------
   // Site Project
   // -------------------------------------------------------------------------------------------------------------------
-
   lazy val site = Project("site", file("site"))
     .dependsOn(sprayCaching, sprayCan, sprayRouting)
     .settings(siteSettings: _*)
@@ -171,7 +212,7 @@ object Build extends Build with DocSupport {
     .dependsOn(sprayCaching, sprayCan, sprayClient, sprayHttp, sprayHttpx, sprayIO, sprayRouting,
                sprayServlet, sprayTestKit, sprayUtil)
     .settings(docsSettings: _*)
-    .settings(libraryDependencies ++= test(akkaActor, akkaTestKit, sprayJson, specs2, json4sNative))
+    .settings(libraryDependencies ++= test(akkaActor, sprayJson, specs2, json4sNative))
 
 
   // -------------------------------------------------------------------------------------------------------------------
@@ -204,9 +245,9 @@ object Build extends Build with DocSupport {
 
   lazy val simpleHttpServer = Project("simple-http-server", file("examples/spray-can/simple-http-server"))
     .dependsOn(sprayCan, sprayHttp)
-    .settings(exampleSettings: _*)
+    .settings(standaloneServerExampleSettings: _*)
     .settings(libraryDependencies ++=
-      compile(akkaActor) ++
+      compile(akkaActor, mimepull) ++
       runtime(akkaSlf4j, logback)
     )
 
@@ -228,7 +269,7 @@ object Build extends Build with DocSupport {
 
   lazy val echoServerExample = Project("echo-server", file("examples/spray-io/echo-server"))
     .dependsOn(sprayIO)
-    .settings(exampleSettings: _*)
+    .settings(standaloneServerExampleSettings: _*)
     .settings(libraryDependencies ++=
       compile(akkaActor) ++
       runtime(akkaSlf4j, logback)
@@ -250,7 +291,7 @@ object Build extends Build with DocSupport {
 
   lazy val onSprayCan = Project("on-spray-can", file("examples/spray-routing/on-spray-can"))
     .dependsOn(sprayCaching, sprayCan, sprayRouting, sprayTestKit % "test")
-    .settings(exampleSettings: _*)
+    .settings(standaloneServerExampleSettings: _*)
     .settings(libraryDependencies ++=
       compile(akkaActor) ++
       test(specs2) ++
@@ -259,7 +300,7 @@ object Build extends Build with DocSupport {
 
   lazy val simpleRoutingApp = Project("simple-routing-app", file("examples/spray-routing/simple-routing-app"))
     .dependsOn(sprayCan, sprayRouting)
-    .settings(exampleSettings: _*)
+    .settings(standaloneServerExampleSettings: _*)
     .settings(libraryDependencies ++= compile(akkaActor))
 
   lazy val sprayServletExamples = Project("spray-servlet-examples", file("examples/spray-servlet"))

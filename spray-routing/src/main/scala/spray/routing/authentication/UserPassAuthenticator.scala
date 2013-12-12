@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,12 +47,14 @@ object UserPassAuthenticator {
           }
         }
       }
+}
 
+object CachedUserPassAuthenticator {
   /**
    * Creates a wrapper around an UserPassAuthenticator providing authentication lookup caching using the given cache.
    * Note that you need to manually add a dependency to the spray-caching module in order to be able to use this method.
    */
-  def cached[T](inner: UserPassAuthenticator[T], cache: Cache[Option[T]] = LruCache[Option[T]]())(implicit ec: ExecutionContext): UserPassAuthenticator[T] =
+  def apply[T](inner: UserPassAuthenticator[T], cache: Cache[Option[T]] = LruCache[Option[T]]())(implicit ec: ExecutionContext): UserPassAuthenticator[T] =
     userPassOption ⇒
       cache(userPassOption) {
         inner(userPassOption)

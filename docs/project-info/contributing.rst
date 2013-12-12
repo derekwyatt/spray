@@ -22,6 +22,36 @@ Here is how:
    you are targeting (check the :ref:`Current Versions` chapter for more info on this).
 3. Run ``sbt compile test`` to compile the suite and run all tests.
 
+Contributing documentation
+--------------------------
+
+The site, i.e. what you see here at http://spray.io, is built with *spray* itself. It uses sphinx_ to generate
+documentation from `reStructured text`_ files located in the ``docs`` folder of the *spray* checkout. The documentation
+is served from the ``site`` sub-project of the sbt build. If you want to contribute documentation make sure you can
+build and view the site locally. Follow these instructions to get the site project working locally:
+
+* Follow the instructions in the above section about `building spray`_.
+* Install sphinx_  (in Debian / Ubuntu install the ``python-sphinx`` package, for OS/X see this `mailing list thread`_).
+* Find the path of ``sphinx-build`` (in Ubuntu it's probably ``/usr/bin/sphinx-build``)
+* Set the SPHINX_PATH environment variable to that path.
+* Run sbt
+* In the sbt shell use ``project site`` to change into the site project.
+* Use ``compile`` to build the site, this will take some time when running for the first time (~ 1 - 3 minutes).
+* Use ``re-start`` [1]_ to start the local site server.
+* Browse to http://localhost:8080
+* Use ``~ products`` in sbt to let it monitor changes to the documentation sources automatically.
+* Edit the documentation files inside the ``docs`` subdirectory. After saving a file, it will be automatically
+  picked up by sbt, then it will be regenerated and be available in the browser after ~ 1 - 5 seconds with a refresh
+  of the page.
+
+.. [1] ``re-start`` is a task from the sbt-revolver_ plugin which starts a project in the background while you can
+       still use the sbt shell for other tasks.
+.. _sphinx: http://sphinx-doc.org/
+.. _`reStructured text`: http://docutils.sourceforge.net/docs/user/rst/quickref.html
+.. _`mailing list thread`: https://groups.google.com/d/msg/spray-user/x2PJUYkn1Vs/JxhT_rRoJS0J
+.. _sbt-revolver: https://github.com/spray/sbt-revolver
+
+
 
 git Branching Model
 -------------------
@@ -60,8 +90,10 @@ settings (most importantly the ``reference.conf`` files).
 
 The category that a commit belongs to is indicated with a respective marker character that the commit's message must
 start with (followed by a space char), e.g. ``= testkit: clean up imports``. Note that *all* commits must carry exactly
-one of the markers listed in the table above! This makes sure that the committer has actively thought about the effects
-of the commit on the API surface.
+one of the markers listed in the table above, with one exception: merge commits that don't introduce any changes
+themselves do not have to carry a marker. Instead, they start with "Merge".
+Requiring the marker makes sure that the committer has actively thought about the effects of the commit on the public
+API surface.
 
 Also, all commits in the "Extending" and especially in the "Breaking" category should contain a dedicated paragraph
 (in addition to the summary line) explaining in what way the change breaks the API and why this is necessary/beneficial.
@@ -81,14 +113,15 @@ Contributor License Agreement (CLA)
 -----------------------------------
 
 Contributions to the project, no matter what kind, are always very welcome.
-However, we can only accept patches if the patch is your original work and you license your work to the *spray* project
-under the :ref:`project's open source license <license>`. In order the provide a proper legal foundation for this we
-need to ask you to sign `our CLA`_, which is a direct adaptation of the
-`Apache Foundation's Individual Contributor License Agreement V2.0`__.
+However, we would like to make sure that we as the project maintainers as well as the contributors are properly covered
+with regard to the legal aspects of their contributions. This is why we can only accept patches if the patch is your
+original work and you license your work to the *spray* project under the :ref:`project's open source license <license>`.
 
-If you have not already done so, please
-download_, complete and sign a copy of the CLA and then scan and :ref:`email <Contact>` us a PDF file!
-If you prefer you can also snail-mail us the original, please ask for the mailing address.
+In order the provide a proper legal foundation for this we need to ask you to sign `our CLA`_, which is a direct
+adaptation of the `Apache Foundation's Individual Contributor License Agreement V2.0`__.
+
+If you have not already done so, please download_, complete and sign a copy of the CLA and then scan and :ref:`email <Contact>`
+us a PDF file! If you prefer you can also snail-mail us the original, please ask for the mailing address.
 
 .. _download: `our CLA`_
 .. _our CLA: /spray.io-CLA.pdf

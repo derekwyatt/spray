@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 package spray.http
 
 import org.specs2.mutable.Specification
+import spray.util.UTF8
 import Uri._
 
 class UriSpec extends Specification {
@@ -219,7 +220,7 @@ class UriSpec extends Specification {
   }
 
   "Uri.Query instances" should {
-    def parser(mode: Uri.ParsingMode): String ⇒ Query = Query(_, mode)
+    def parser(mode: Uri.ParsingMode): String ⇒ Query = Query(_, mode = mode)
     "be parsed and rendered correctly in strict mode" in {
       val test = parser(Uri.ParsingMode.Strict)
       test("") === ("", "") +: Query.Empty
@@ -308,6 +309,10 @@ class UriSpec extends Specification {
       // don't double decode
       Uri("%2520").path.head === "%20"
       Uri("/%2F%5C").path === Path / """/\"""
+
+      // render
+      Uri("https://server.com/path/to/here?st=12345").toString === "https://server.com/path/to/here?st=12345"
+      Uri("/foo/?a#b").toString === "/foo/?a#b"
     }
 
     "properly complete a normalization cycle" in {
@@ -356,8 +361,8 @@ class UriSpec extends Specification {
       // queries
       normalize("?") === "?"
       normalize("?key") === "?key"
-      normalize("?key=") === "?key" // our query model cannot discriminate between these two inputs
-      normalize("?key=&a=b") === "?key&a=b" // our query model cannot discriminate between these two inputs
+      normalize("?key=") === "?key="
+      normalize("?key=&a=b") === "?key=&a=b"
       normalize("?key={}&a=[]") === "?key=%7B%7D&a=%5B%5D"
       normalize("?key={}&a=[]", mode = Uri.ParsingMode.Strict) must throwAn[IllegalUriException]
       normalize("?=value") === "?=value"
@@ -490,6 +495,42 @@ class UriSpec extends Specification {
     "be properly copyable" in {
       val uri = Uri("http://host:80/path?query#fragment")
       uri.copy() === uri
+    }
+
+    "provide sugar for fluent transformations" in {
+      val uri = Uri("http://host:80/path?query#fragment")
+      val nonDefaultUri = Uri("http://host:6060/path?query#fragment")
+
+      uri.withScheme("https") === Uri("https://host/path?query#fragment")
+      nonDefaultUri.withScheme("https") === Uri("https://host:6060/path?query#fragment")
+
+      uri.withAuthority(Authority(Host("other"), 3030)) === Uri("http://other:3030/path?query#fragment")
+      uri.withAuthority(Host("other"), 3030) === Uri("http://other:3030/path?query#fragment")
+      uri.withAuthority("other", 3030) === Uri("http://other:3030/path?query#fragment")
+
+      uri.withHost(Host("other")) === Uri("http://other:80/path?query#fragment")
+      uri.withHost("other") === Uri("http://other:80/path?query#fragment")
+      uri.withPort(90) === Uri("http://host:90/path?query#fragment")
+
+      uri.withPath(Path("/newpath")) === Uri("http://host/newpath?query#fragment")
+      uri.withUserInfo("someInfo") === Uri("http://someInfo@host:80/path?query#fragment")
+
+      uri.withQuery(Query("param1" -> "value1")) === Uri("http://host:80/path?param1=value1#fragment")
+      uri.withQuery("param1=value1") === Uri("http://host:80/path?param1=value1#fragment")
+      uri.withQuery(("param1", "value1")) === Uri("http://host:80/path?param1=value1#fragment")
+      uri.withQuery(Map("param1" -> "value1")) === Uri("http://host:80/path?param1=value1#fragment")
+
+      uri.withFragment("otherFragment") === Uri("http://host:80/path?query#otherFragment")
+    }
+
+    "return the correct effective port" in {
+      80 === Uri("http://host/").effectivePort
+      21 === Uri("ftp://host/").effectivePort
+      9090 === Uri("http://host:9090/").effectivePort
+      443 === Uri("https://host/").effectivePort
+
+      4450 === Uri("https://host/").withPort(4450).effectivePort
+      4450 === Uri("https://host:3030/").withPort(4450).effectivePort
     }
   }
 }

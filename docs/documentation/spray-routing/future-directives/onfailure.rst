@@ -1,6 +1,0 @@
-.. _-onFailure-:
-
-onFailure
-=========
-
-(todo)

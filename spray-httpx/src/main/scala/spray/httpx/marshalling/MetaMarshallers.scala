@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,13 +22,13 @@ import akka.actor.{ ActorRef, Actor, Props, ActorRefFactory }
 import akka.io.Tcp
 import spray.http._
 
-trait MetaMarshallers {
+trait MetaMarshallers extends LowerPriorityImplicitMetaMarshallers {
 
   implicit def optionMarshaller[T](implicit m: Marshaller[T]) =
     Marshaller[Option[T]] { (value, ctx) ⇒
       value match {
         case Some(v) ⇒ m(v, ctx)
-        case None    ⇒ ctx.marshalTo(EmptyEntity)
+        case None    ⇒ ctx.marshalTo(HttpEntity.Empty)
       }
     }
 
@@ -72,15 +72,15 @@ object MetaMarshallers extends MetaMarshallers {
 
       case current #:: rest ⇒
         val chunkingCtx = new DelegatingMarshallingContext(ctx) {
-          override def marshalTo(entity: HttpEntity): Unit = {
-            if (connectionActor == null) connectionActor = ctx.startChunkedMessage(entity, Some(SentOk(rest)))
-            else connectionActor ! MessageChunk(entity.buffer).withAck(SentOk(rest))
-          }
+          override def marshalTo(entity: HttpEntity, headers: HttpHeader*): Unit =
+            if (connectionActor == null) connectionActor = ctx.startChunkedMessage(entity, Some(SentOk(rest)), headers)
+            else connectionActor ! MessageChunk(entity.data).withAck(SentOk(rest))
+
           override def handleError(error: Throwable): Unit = {
             context.stop(self)
             ctx.handleError(error)
           }
-          override def startChunkedMessage(entity: HttpEntity, sentAck: Option[Any])(implicit sender: ActorRef) =
+          override def startChunkedMessage(entity: HttpEntity, sentAck: Option[Any], headers: Seq[HttpHeader])(implicit sender: ActorRef) =
             sys.error("Cannot marshal a stream of streams")
         }
         marshaller(current.asInstanceOf[T], chunkingCtx)
@@ -95,5 +95,27 @@ object MetaMarshallers extends MetaMarshallers {
         context.stop(self)
     }
   }
+}
 
+trait LowerPriorityImplicitMetaMarshallers {
+  implicit def mMarshaller[M[_], T](implicit mm: MarshallerM[M], mt: Marshaller[T]): Marshaller[M[T]] =
+    mm.marshaller
+}
+
+trait MarshallerM[M[_]] {
+  def marshaller[T: Marshaller]: Marshaller[M[T]]
+}
+
+object MarshallerM {
+  implicit val optionMarshallerM: MarshallerM[Option] =
+    new MarshallerM[Option] { def marshaller[T: Marshaller] = implicitly[Marshaller[Option[T]]] }
+
+  implicit def futureMarshallerM(implicit ec: ExecutionContext): MarshallerM[Future] =
+    new MarshallerM[Future] { def marshaller[T: Marshaller] = implicitly[Marshaller[Future[T]]] }
+
+  implicit val tryMarshallerM: MarshallerM[Try] =
+    new MarshallerM[Try] { def marshaller[T: Marshaller] = implicitly[Marshaller[Try[T]]] }
+
+  implicit def streamMarshallerM(implicit refFactory: ActorRefFactory): MarshallerM[Stream] =
+    new MarshallerM[Stream] { def marshaller[T: Marshaller] = implicitly[Marshaller[Stream[T]]] }
 }

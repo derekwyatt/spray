@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ class RootNodeSpec extends Specification {
     "properly find a node by uri" in {
       //      RootNode.find("documentation/spray-io/big-picture/").toString ===
       //        "Some(Big Picture: documentation/spray-io/big-picture/)"
+      pending
     }
   }
 

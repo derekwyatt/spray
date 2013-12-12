@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2013 spray.io
+ * Copyright © 2011-2013 the spray project <http://spray.io>
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,9 @@ class FormFieldSpec extends Specification {
   val formData =
     FormData(Map("surname" -> "Smith", "age" -> "42"))
   val multipartFormData =
-    MultipartFormData(Map("surname" -> BodyPart("Smith"), "age" -> BodyPart(marshal(<int>42</int>).get)))
+    MultipartFormData(Seq(
+      BodyPart("Smith", Seq(HttpHeaders.`Content-Disposition`("form-data", Map("name" -> "surname")))),
+      BodyPart(marshal(<int>42</int>).get, Seq(HttpHeaders.`Content-Disposition`("form-data", Map("filename" -> "age.xml", "name" -> "age"))))))
 
   "The FormField infrastructure" should {
     "properly allow access to the fields of www-urlencoded forms" in {
@@ -61,14 +63,15 @@ class FormFieldSpec extends Specification {
       marshal(formData)
         .flatMap(_.as[HttpForm])
         .flatMap(_.field("age").as[NodeSeq]) ===
-        Left(UnsupportedContentType("Field 'age' can only be read from 'multipart/form-data' form content"))
+        Left(UnsupportedContentType("Expected 'text/xml' or 'application/xml' or 'text/html' or 'application/xhtml+xml' " +
+          "but tried to read from application/x-www-form-urlencoded encoded field 'age' which provides only text/plain values."))
     }
 
     "return an error when accessing a field of multipart forms for which no Unmarshaller is available" in {
       marshal(multipartFormData)
         .flatMap(_.as[HttpForm])
         .flatMap(_.field("age").as[Int]) ===
-        Left(UnsupportedContentType("Field 'age' can only be read from 'application/x-www-form-urlencoded' form content"))
+        Left(UnsupportedContentType("Field 'age' can only be read from 'application/x-www-form-urlencoded' form content but was 'text/xml'"))
     }
   }
 
